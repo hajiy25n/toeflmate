@@ -85,10 +85,10 @@ export default function SpeakingPage(app) {
         `;
         bindLogout();
 
-        document.getElementById("skip-btn").addEventListener("click", () => {
+        document.getElementById("skip-btn").addEventListener("click", async () => {
             stopSpeaking();
             if (timerCtrl) timerCtrl.stop();
-            if (useRecording) transcript = recorder.stop();
+            if (useRecording) transcript = await recorder.stop();
             showReview();
         });
 
@@ -96,9 +96,9 @@ export default function SpeakingPage(app) {
             startAnswerPhase();
         });
 
-        document.getElementById("stop-btn").addEventListener("click", () => {
+        document.getElementById("stop-btn").addEventListener("click", async () => {
             if (timerCtrl) timerCtrl.stop();
-            if (useRecording) transcript = recorder.stop();
+            if (useRecording) transcript = await recorder.stop();
             showReview();
         });
 
@@ -124,8 +124,8 @@ export default function SpeakingPage(app) {
         const timerArea = document.getElementById("timer-area");
         if (!timerArea) return;
 
-        timerCtrl = createTimer(timerArea, RESPONSE_TIME, () => {
-            if (useRecording) transcript = recorder.stop();
+        timerCtrl = createTimer(timerArea, RESPONSE_TIME, async () => {
+            if (useRecording) transcript = await recorder.stop();
             showReview();
         });
         timerCtrl.start();
@@ -162,7 +162,7 @@ export default function SpeakingPage(app) {
                 ${useRecording ? `
                     <div class="card">
                         <h3>My Answer (STT)</h3>
-                        <p class="mt-8" style="line-height:1.8">${transcript || "(인식된 내용 없음 — 마이크 권한과 브라우저 STT 지원을 확인하세요)"}</p>
+                        <p class="mt-8" style="line-height:1.8">${transcript || "(음성이 인식되지 않았습니다)"}</p>
                         ${audioUrl ? `
                             <div class="mt-8">
                                 <audio controls src="${audioUrl}" style="width:100%"></audio>

@@ -14,7 +14,6 @@ export function createRecorder() {
                 return false;
             }
         } catch {}
-        // Try getting stream to trigger browser permission prompt
         try {
             const testStream = await navigator.mediaDevices.getUserMedia({ audio: true });
             testStream.getTracks().forEach(t => t.stop());
@@ -34,6 +33,7 @@ export function createRecorder() {
         audioChunks = [];
         if (audioUrl) { URL.revokeObjectURL(audioUrl); audioUrl = null; }
 
+        // Start microphone recording
         try {
             stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             mediaRecorder = new MediaRecorder(stream);
@@ -45,25 +45,54 @@ export function createRecorder() {
             console.warn("Microphone not available:", e);
         }
 
+        // Start speech recognition
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (SpeechRecognition) {
             recognition = new SpeechRecognition();
             recognition.continuous = true;
-            recognition.interimResults = false;
+            recognition.interimResults = true; // Capture interim results too
             recognition.lang = "en-US";
             recognition.onresult = (e) => {
-                for (let i = e.resultIndex; i < e.results.length; i++) {
-                    if (e.results[i].isFinal) {
-                        transcript += e.results[i][0].transcript + " ";
-                    }
+                // Rebuild full transcript from all results
+                let full = "";
+                for (let i = 0; i < e.results.length; i++) {
+                    full += e.results[i][0].transcript + " ";
+                }
+                transcript = full;
+            };
+            recognition.onerror = (e) => {
+                console.warn("STT error:", e.error);
+                // Restart on non-fatal errors
+                if (e.error === "no-speech" || e.error === "aborted") {
+                    try { recognition?.start(); } catch {}
                 }
             };
-            recognition.onerror = () => {};
-            recognition.start();
+            recognition.onend = () => {
+                // Auto-restart if still recording (continuous mode can stop unexpectedly)
+                if (stream && recognition) {
+                    try { recognition.start(); } catch {}
+                }
+            };
+            try {
+                recognition.start();
+            } catch (e) {
+                console.warn("STT start error:", e);
+            }
         }
     }
 
-    function stop() {
+    async function stop() {
+        // Stop recognition first and wait briefly for final results
+        const recog = recognition;
+        recognition = null; // Prevent auto-restart in onend
+        if (recog) {
+            try { recog.stop(); } catch {}
+        }
+
+        // Wait a moment for final STT results to arrive
+        await new Promise(r => setTimeout(r, 500));
+
+        // Stop media recorder
         if (mediaRecorder && mediaRecorder.state !== "inactive") {
             mediaRecorder.stop();
         }
@@ -71,10 +100,7 @@ export function createRecorder() {
             stream.getTracks().forEach(t => t.stop());
             stream = null;
         }
-        if (recognition) {
-            recognition.stop();
-            recognition = null;
-        }
+
         // Create audio URL for playback
         if (audioChunks.length > 0) {
             const blob = new Blob(audioChunks, { type: "audio/webm" });

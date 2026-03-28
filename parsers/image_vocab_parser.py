@@ -84,32 +84,45 @@ def _try_ocr_space(image_path: str) -> list[dict]:
         with open(image_path, "rb") as f:
             file_data = f.read()
 
-        # Detect file type
         ext = os.path.splitext(image_path)[1].lower()
         mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
                 "gif": "image/gif", "bmp": "image/bmp", "webp": "image/webp"}.get(ext.lstrip("."), "image/jpeg")
 
         import httpx
-        with httpx.Client(timeout=30.0) as client:
-            resp = client.post(
-                "https://api.ocr.space/parse/image",
-                files={"file": (os.path.basename(image_path), file_data, mime)},
-                data={
-                    "apikey": "helloworld",  # Free tier test key
-                    "language": "kor",
-                    "isOverlayRequired": "false",
-                    "detectOrientation": "true",
-                    "scale": "true",
-                    "OCREngine": "2",  # Engine 2 is better for Asian languages
-                },
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                results = data.get("ParsedResults", [])
-                if results:
-                    text = results[0].get("ParsedText", "")
-                    if text.strip():
-                        return parse_vocab_text(text)
+        best_words = []
+
+        # Try multiple OCR engine settings
+        for engine, lang in [("2", "kor"), ("1", "kor"), ("2", "eng")]:
+            try:
+                with httpx.Client(timeout=30.0) as client:
+                    resp = client.post(
+                        "https://api.ocr.space/parse/image",
+                        files={"file": (os.path.basename(image_path), file_data, mime)},
+                        data={
+                            "apikey": "helloworld",
+                            "language": lang,
+                            "isOverlayRequired": "false",
+                            "detectOrientation": "true",
+                            "scale": "true",
+                            "isTable": "true",
+                            "OCREngine": engine,
+                        },
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        results = data.get("ParsedResults", [])
+                        if results:
+                            text = results[0].get("ParsedText", "")
+                            if text.strip():
+                                words = parse_vocab_text(text)
+                                if len(words) > len(best_words):
+                                    best_words = words
+                                    if len(words) >= 5:
+                                        return words
+            except Exception:
+                continue
+
+        return best_words
     except Exception:
         pass
 
