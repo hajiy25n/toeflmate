@@ -97,3 +97,35 @@ export function createInlineTimer(totalSeconds, onEnd) {
 
     return { el, start, stop, getElapsed };
 }
+
+// Count-up timer (elapsed time display)
+export function createElapsedTimer() {
+    const el = document.createElement("span");
+    el.className = "timer-inline";
+    let elapsed = 0;
+    let interval = null;
+
+    function update() {
+        const m = Math.floor(elapsed / 60);
+        const s = elapsed % 60;
+        el.textContent = `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    }
+
+    function start() {
+        update();
+        interval = setInterval(() => {
+            elapsed++;
+            update();
+        }, 1000);
+    }
+
+    function stop() {
+        if (interval) { clearInterval(interval); interval = null; }
+    }
+
+    function getElapsed() {
+        return elapsed;
+    }
+
+    return { el, start, stop, getElapsed };
+}

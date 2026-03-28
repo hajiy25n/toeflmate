@@ -1,16 +1,13 @@
 import API from "../lib/api.js";
 import Store from "../lib/store.js";
 import { renderHeader, bindLogout } from "../components/nav.js";
-import { createInlineTimer } from "../components/timer.js";
+import { createElapsedTimer } from "../components/timer.js";
 import { countWords, attachWordCounter } from "../components/word-counter.js";
 import { renderDiff } from "../components/diff-view.js";
-
-const TIME_LIMIT = 420; // 7 minutes
 
 export default function WritingEmailPage(app) {
     let currentQuestion = null;
     let timerCtrl = null;
-    let startTime = null;
 
     function renderMenu() {
         app.innerHTML = `
@@ -21,7 +18,7 @@ export default function WritingEmailPage(app) {
             </div>
             <div class="card">
                 <h3>Email Writing Practice</h3>
-                <p class="text-muted mt-8">시나리오를 읽고 7분 안에 이메일을 작성하세요.</p>
+                <p class="text-muted mt-8">시나리오를 읽고 이메일을 작성하세요.</p>
                 <button class="btn btn-primary btn-block mt-24" id="start-btn">연습 시작</button>
             </div>
         `;
@@ -42,16 +39,11 @@ export default function WritingEmailPage(app) {
     async function loadNextQuestion() {
         try {
             const res = await API.get(`/api/next-question?type=writing_email&exclude=${Store.getExcludeParam()}`);
-            if (!res.ok) {
-                renderDone();
-                return;
-            }
+            if (!res.ok) { renderDone(); return; }
             currentQuestion = res.question;
             Store.addUsedQuestion(currentQuestion.id);
             renderPractice();
-        } catch {
-            renderDone();
-        }
+        } catch { renderDone(); }
     }
 
     function renderPractice() {
@@ -61,9 +53,9 @@ export default function WritingEmailPage(app) {
         app.innerHTML = `
             ${renderHeader("Writing Email")}
             <div class="writing-header">
-                <div class="scenario">${currentQuestion.prompt_text}</div>
+                <p class="scenario" style="line-height:1.8;white-space:pre-line">${currentQuestion.prompt_text}</p>
                 ${bullets.length ? `
-                    <ul class="bullets">
+                    <ul class="bullets mt-8">
                         ${bullets.map(b => `<li>${b}</li>`).join("")}
                     </ul>
                 ` : ""}
@@ -81,12 +73,9 @@ export default function WritingEmailPage(app) {
         const wordDisplay = document.getElementById("word-display");
         attachWordCounter(textarea, wordDisplay);
 
-        timerCtrl = createInlineTimer(TIME_LIMIT, () => {
-            submitAnswer();
-        });
+        timerCtrl = createElapsedTimer();
         document.getElementById("timer-slot").appendChild(timerCtrl.el);
         timerCtrl.start();
-        startTime = Date.now();
 
         document.getElementById("submit-btn").addEventListener("click", submitAnswer);
     }
@@ -94,7 +83,7 @@ export default function WritingEmailPage(app) {
     function submitAnswer() {
         if (timerCtrl) timerCtrl.stop();
         const answer = document.getElementById("answer-area").value;
-        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        const elapsed = timerCtrl ? timerCtrl.getElapsed() : 0;
         const words = countWords(answer);
         showReview(answer, elapsed, words);
     }
@@ -106,7 +95,7 @@ export default function WritingEmailPage(app) {
         app.innerHTML = `
             ${renderHeader("Writing Email")}
             <div class="review-question">
-                <strong>Prompt:</strong><br>${currentQuestion.prompt_text}
+                <p style="white-space:pre-line">${currentQuestion.prompt_text}</p>
             </div>
             <div id="diff-area"></div>
             <div class="review-stats">
@@ -124,26 +113,16 @@ export default function WritingEmailPage(app) {
         if (currentQuestion.template_answer) {
             renderDiff(diffArea, answer, currentQuestion.template_answer);
         } else {
-            diffArea.innerHTML = `
-                <div class="card"><h3>My Answer</h3><p class="mt-8" style="line-height:1.8;white-space:pre-wrap">${answer}</p></div>
-            `;
+            diffArea.innerHTML = `<div class="card"><h3>My Answer</h3><p class="mt-8" style="line-height:1.8;white-space:pre-wrap">${answer}</p></div>`;
         }
 
         API.post(`/api/sessions/${Store.currentSession.id}/questions`, {
-            question_id: currentQuestion.id,
-            user_response: answer,
-            elapsed_seconds: elapsed,
-            word_count: words,
+            question_id: currentQuestion.id, user_response: answer,
+            elapsed_seconds: elapsed, word_count: words,
         }).catch(() => {});
 
-        document.getElementById("next-btn").addEventListener("click", () => {
-            timerCtrl = null;
-            loadNextQuestion();
-        });
-        document.getElementById("end-btn").addEventListener("click", () => {
-            Store.endSession();
-            renderMenu();
-        });
+        document.getElementById("next-btn").addEventListener("click", () => { timerCtrl = null; loadNextQuestion(); });
+        document.getElementById("end-btn").addEventListener("click", () => { Store.endSession(); renderMenu(); });
     }
 
     function renderDone() {
@@ -155,8 +134,7 @@ export default function WritingEmailPage(app) {
                 <button class="btn btn-primary mt-24" onclick="location.hash='#/'">홈으로</button>
             </div>
         `;
-        bindLogout();
-        Store.endSession();
+        bindLogout(); Store.endSession();
     }
 
     renderMenu();

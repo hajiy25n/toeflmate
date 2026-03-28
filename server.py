@@ -1,12 +1,18 @@
 import os
 import json
 import tempfile
+import hashlib
+import httpx
+import edge_tts
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, UploadFile, File, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 import db
 import auth
+
+TTS_CACHE_DIR = os.path.join(os.path.dirname(__file__), ".tts_cache")
+os.makedirs(TTS_CACHE_DIR, exist_ok=True)
 
 
 @asynccontextmanager
@@ -81,6 +87,64 @@ async def api_me(request: Request):
     if not row:
         return JSONResponse({"ok": False}, status_code=401)
     return {"ok": True, "user_id": row["id"], "username": row["username"]}
+
+
+@app.post("/api/recover-password")
+async def api_recover_password(request: Request):
+    body = await request.json()
+    result = auth.recover_password(body.get("username", ""))
+    if not result["ok"]:
+        return JSONResponse(result, status_code=400)
+    return result
+
+
+@app.get("/api/profile")
+async def api_profile(request: Request):
+    user_id = require_auth(request)
+    profile = auth.get_user_profile(user_id)
+    if not profile:
+        raise HTTPException(404)
+    return profile
+
+
+@app.get("/api/dictionary/{word}")
+async def api_dictionary(word: str):
+    """Translate English word/phrase to Korean meaning via Google Translate."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            # Google Translate (unofficial, free)
+            resp = await client.get(
+                "https://translate.googleapis.com/translate_a/single",
+                params={
+                    "client": "gtx",
+                    "sl": "en",
+                    "tl": "ko",
+                    "dt": "t",
+                    "q": word,
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                ko = data[0][0][0] if data and data[0] and data[0][0] else ""
+                if ko and ko != word:
+                    return {"ok": True, "word": word, "meaning_ko": ko}
+    except Exception:
+        pass
+    # Fallback: MyMemory
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            tr = await client.get(
+                "https://api.mymemory.translated.net/get",
+                params={"q": word, "langpair": "en|ko"}
+            )
+            if tr.status_code == 200:
+                td = tr.json()
+                ko = td.get("responseData", {}).get("translatedText", "")
+                if ko and ko.lower() != word.lower():
+                    return {"ok": True, "word": word, "meaning_ko": ko}
+    except Exception:
+        pass
+    return {"ok": False, "word": word, "meaning_ko": ""}
 
 
 # --- Questions endpoints ---
@@ -199,6 +263,118 @@ async def api_import_confirm(request: Request):
         q["source_file"] = body.get("filename", "")
     ids = db.add_questions(user_id, questions)
     return {"ok": True, "ids": ids, "count": len(ids)}
+
+
+# --- Vocabulary endpoints ---
+
+@app.get("/api/vocab")
+async def api_vocab(request: Request, category: str = None):
+    user_id = require_auth(request)
+    return db.get_vocab(user_id, category)
+
+
+@app.get("/api/vocab/categories")
+async def api_vocab_categories(request: Request):
+    user_id = require_auth(request)
+    return db.get_vocab_categories(user_id)
+
+
+@app.post("/api/vocab")
+async def api_add_vocab(request: Request):
+    user_id = require_auth(request)
+    body = await request.json()
+    words = body if isinstance(body, list) else [body]
+    ids = db.add_vocab(user_id, words)
+    return {"ok": True, "ids": ids}
+
+
+@app.delete("/api/vocab/{vocab_id}")
+async def api_delete_vocab(vocab_id: int, request: Request):
+    user_id = require_auth(request)
+    ok = db.delete_vocab(user_id, vocab_id)
+    if not ok:
+        raise HTTPException(404, "단어를 찾을 수 없습니다.")
+    return {"ok": True}
+
+
+@app.put("/api/vocab/{vocab_id}")
+async def api_update_vocab(vocab_id: int, request: Request):
+    user_id = require_auth(request)
+    body = await request.json()
+    ok = db.update_vocab(user_id, vocab_id, body)
+    if not ok:
+        raise HTTPException(404, "단어를 찾을 수 없거나 변경할 내용이 없습니다.")
+    return {"ok": True}
+
+
+@app.post("/api/vocab/{vocab_id}/master")
+async def api_vocab_master(vocab_id: int, request: Request):
+    user_id = require_auth(request)
+    body = await request.json()
+    db.mark_vocab_mastered(user_id, vocab_id, body.get("mastered", True))
+    return {"ok": True}
+
+
+@app.post("/api/vocab/reset-mastery")
+async def api_vocab_reset_mastery(request: Request):
+    user_id = require_auth(request)
+    body = await request.json()
+    db.reset_vocab_mastery(user_id, body.get("category"))
+    return {"ok": True}
+
+
+@app.post("/api/vocab/seen")
+async def api_vocab_seen(request: Request):
+    user_id = require_auth(request)
+    body = await request.json()
+    db.record_vocab_seen(user_id, body["vocab_id"], body.get("correct", False))
+    return {"ok": True}
+
+
+@app.post("/api/vocab/import-image")
+async def api_vocab_import_image(request: Request, file: UploadFile = File(...)):
+    user_id = require_auth(request)
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    # Use unique temp name to avoid collisions
+    import uuid
+    ext = os.path.splitext(file.filename)[1] or ".jpg"
+    tmp = os.path.join(UPLOAD_DIR, f"ocr_{uuid.uuid4().hex}{ext}")
+    with open(tmp, "wb") as f:
+        f.write(await file.read())
+    try:
+        from parsers.image_vocab_parser import parse_vocab_image
+        words = parse_vocab_image(tmp)
+        return {"ok": True, "words": words, "filename": file.filename}
+    except ImportError as e:
+        return JSONResponse({"ok": False, "error": f"OCR 라이브러리 오류: {e}"}, status_code=500)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+# --- TTS endpoint (Microsoft Neural Voice) ---
+
+@app.post("/api/tts")
+async def api_tts(request: Request):
+    body = await request.json()
+    text = body.get("text", "").strip()
+    voice = body.get("voice", "en-US-AvaMultilingualNeural")
+    if not text:
+        raise HTTPException(400, "text is required")
+
+    # Cache by text+voice hash
+    key = hashlib.md5(f"{voice}:{text}".encode()).hexdigest()
+    cache_path = os.path.join(TTS_CACHE_DIR, f"{key}.mp3")
+
+    if not os.path.exists(cache_path):
+        communicate = edge_tts.Communicate(text, voice, rate="-5%")
+        await communicate.save(cache_path)
+
+    return FileResponse(cache_path, media_type="audio/mpeg")
 
 
 # --- Static files ---

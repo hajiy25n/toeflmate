@@ -37,8 +37,8 @@ def register(username: str, password: str) -> dict:
 
     pw_hash = hash_password(password)
     cur = conn.execute(
-        "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-        (username, pw_hash),
+        "INSERT INTO users (username, password_hash, password_plain) VALUES (?, ?, ?)",
+        (username, pw_hash, password),
     )
     conn.commit()
     user_id = cur.lastrowid
@@ -75,6 +75,36 @@ def get_user_id(token: str) -> int | None:
     ).fetchone()
     conn.close()
     return row["user_id"] if row else None
+
+
+def recover_password(username: str) -> dict:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT password_plain FROM users WHERE username=?", (username,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return {"ok": False, "error": "존재하지 않는 아이디입니다."}
+    pw = row["password_plain"]
+    if not pw:
+        return {"ok": False, "error": "비밀번호 복구 정보가 없습니다. (이전 가입 계정)"}
+    return {"ok": True, "password": pw}
+
+
+def get_user_profile(user_id: int) -> dict | None:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT id, username, password_plain, created_at FROM users WHERE id=?", (user_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "user_id": row["id"],
+        "username": row["username"],
+        "password": row["password_plain"] or "***",
+        "created_at": row["created_at"],
+    }
 
 
 def logout(token: str):

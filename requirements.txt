@@ -4,5 +4,7 @@ openpyxl
 aiofiles
 bcrypt
 python-multipart
+httpx
+edge-tts
 python-docx
 pandas

@@ -138,6 +138,42 @@ a { color: var(--accent); text-decoration: none; }
 }
 .back-btn:hover { color: var(--text); }
 
+/* === Settings Dropdown === */
+.settings-wrap { position: relative; }
+.settings-btn {
+    background: none; border: none; cursor: pointer;
+    font-size: 1.3rem; padding: 4px 6px; line-height: 1;
+    opacity: 0.7; transition: opacity 0.2s;
+}
+.settings-btn:hover { opacity: 1; }
+.settings-dropdown {
+    position: absolute; right: 0; top: 100%;
+    margin-top: 8px; min-width: 220px;
+    background: var(--bg-card); border: 1px solid #2a3a5c;
+    border-radius: var(--radius-sm); padding: 12px 0;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.4); z-index: 100;
+}
+.settings-dropdown-arrow {
+    position: absolute; top: -6px; right: 12px;
+    width: 12px; height: 12px; background: var(--bg-card);
+    border-left: 1px solid #2a3a5c; border-top: 1px solid #2a3a5c;
+    transform: rotate(45deg);
+}
+.settings-profile { padding: 8px 16px; }
+.settings-info {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 4px 0; font-size: 0.85rem;
+}
+.settings-label { color: var(--text-muted); }
+.settings-divider { height: 1px; background: #2a3a5c; margin: 8px 0; }
+.settings-item {
+    display: block; width: 100%; padding: 10px 16px;
+    background: none; border: none; text-align: left;
+    color: var(--danger); font-size: 0.9rem; cursor: pointer;
+    transition: background 0.15s;
+}
+.settings-item:hover { background: rgba(239,83,80,0.1); }
+
 /* === Home Grid === */
 .home-grid {
     display: grid; gap: 16px; margin-top: 16px;
@@ -401,6 +437,91 @@ a { color: var(--accent); text-decoration: none; }
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: #2a3a5c; border-radius: 3px; }
+
+/* === Vocabulary Cards === */
+.vocab-card {
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    padding: 32px 24px;
+    text-align: center;
+    min-height: 260px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+.vocab-word {
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: var(--accent);
+}
+.vocab-pos {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    margin-bottom: 16px;
+    font-style: italic;
+}
+.vocab-meaning {
+    font-size: 1.2rem;
+    line-height: 1.7;
+    margin-bottom: 12px;
+    transition: all 0.3s;
+}
+.vocab-hidden {
+    filter: blur(10px);
+    user-select: none;
+    opacity: 0.3;
+    cursor: pointer;
+}
+.vocab-synonyms {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s;
+}
+.vocab-syn-label {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-right: 4px;
+}
+.vocab-syn-list {
+    display: flex; flex-direction: column; gap: 6px;
+    width: 100%;
+}
+.vocab-syn-item {
+    display: flex; align-items: center; gap: 8px;
+    flex-wrap: wrap; justify-content: center;
+}
+.vocab-syn-chip {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 16px;
+    background: var(--bg-input);
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    border: 1px solid #2a3a5c;
+}
+.vocab-syn-meaning {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    font-style: italic;
+}
+.vocab-example {
+    margin-top: 12px;
+    font-size: 0.9rem;
+    color: var(--text-dim);
+    font-style: italic;
+    transition: all 0.3s;
+}
+.vocab-practice-label {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
 
 /* === Responsive === */
 @media (max-width: 480px) {

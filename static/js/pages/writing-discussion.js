@@ -1,16 +1,13 @@
 import API from "../lib/api.js";
 import Store from "../lib/store.js";
 import { renderHeader, bindLogout } from "../components/nav.js";
-import { createInlineTimer } from "../components/timer.js";
+import { createElapsedTimer } from "../components/timer.js";
 import { countWords, attachWordCounter } from "../components/word-counter.js";
 import { renderDiff } from "../components/diff-view.js";
-
-const TIME_LIMIT = 600; // 10 minutes
 
 export default function WritingDiscussionPage(app) {
     let currentQuestion = null;
     let timerCtrl = null;
-    let startTime = null;
 
     function renderMenu() {
         app.innerHTML = `
@@ -21,7 +18,7 @@ export default function WritingDiscussionPage(app) {
             </div>
             <div class="card">
                 <h3>Academic Discussion Practice</h3>
-                <p class="text-muted mt-8">교수 프롬프트와 학생 응답을 읽고 10분 안에 자신의 의견을 작성하세요.</p>
+                <p class="text-muted mt-8">교수 프롬프트와 학생 응답을 읽고 자신의 의견을 작성하세요.</p>
                 <button class="btn btn-primary btn-block mt-24" id="start-btn">연습 시작</button>
             </div>
         `;
@@ -42,16 +39,11 @@ export default function WritingDiscussionPage(app) {
     async function loadNextQuestion() {
         try {
             const res = await API.get(`/api/next-question?type=writing_discussion&exclude=${Store.getExcludeParam()}`);
-            if (!res.ok) {
-                renderDone();
-                return;
-            }
+            if (!res.ok) { renderDone(); return; }
             currentQuestion = res.question;
             Store.addUsedQuestion(currentQuestion.id);
             renderPractice();
-        } catch {
-            renderDone();
-        }
+        } catch { renderDone(); }
     }
 
     function renderPractice() {
@@ -60,22 +52,22 @@ export default function WritingDiscussionPage(app) {
             ${currentQuestion.professor_prompt ? `
                 <div class="card mb-8">
                     <h3 class="text-muted" style="font-size:0.85rem">Professor's Prompt</h3>
-                    <p class="mt-8">${currentQuestion.professor_prompt}</p>
+                    <p class="mt-8" style="line-height:1.8;white-space:pre-line">${currentQuestion.professor_prompt}</p>
                 </div>
             ` : ""}
             <div class="writing-header">
-                <div class="scenario"><strong>Discussion Topic:</strong> ${currentQuestion.prompt_text}</div>
+                <p style="line-height:1.8;white-space:pre-line">${currentQuestion.prompt_text}</p>
             </div>
             ${currentQuestion.student_response_1 ? `
                 <div class="card mb-8" style="font-size:0.9rem">
                     <strong class="text-muted">Student 1:</strong>
-                    <p class="mt-8">${currentQuestion.student_response_1}</p>
+                    <p class="mt-8" style="line-height:1.7;white-space:pre-line">${currentQuestion.student_response_1}</p>
                 </div>
             ` : ""}
             ${currentQuestion.student_response_2 ? `
                 <div class="card mb-8" style="font-size:0.9rem">
                     <strong class="text-muted">Student 2:</strong>
-                    <p class="mt-8">${currentQuestion.student_response_2}</p>
+                    <p class="mt-8" style="line-height:1.7;white-space:pre-line">${currentQuestion.student_response_2}</p>
                 </div>
             ` : ""}
             <div class="writing-toolbar">
@@ -88,13 +80,11 @@ export default function WritingDiscussionPage(app) {
         bindLogout();
 
         const textarea = document.getElementById("answer-area");
-        const wordDisplay = document.getElementById("word-display");
-        attachWordCounter(textarea, wordDisplay);
+        attachWordCounter(textarea, document.getElementById("word-display"));
 
-        timerCtrl = createInlineTimer(TIME_LIMIT, () => submitAnswer());
+        timerCtrl = createElapsedTimer();
         document.getElementById("timer-slot").appendChild(timerCtrl.el);
         timerCtrl.start();
-        startTime = Date.now();
 
         document.getElementById("submit-btn").addEventListener("click", submitAnswer);
     }
@@ -102,7 +92,7 @@ export default function WritingDiscussionPage(app) {
     function submitAnswer() {
         if (timerCtrl) timerCtrl.stop();
         const answer = document.getElementById("answer-area").value;
-        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        const elapsed = timerCtrl ? timerCtrl.getElapsed() : 0;
         const words = countWords(answer);
         showReview(answer, elapsed, words);
     }
@@ -114,7 +104,7 @@ export default function WritingDiscussionPage(app) {
         app.innerHTML = `
             ${renderHeader("Writing Discussion")}
             <div class="review-question">
-                <strong>Topic:</strong><br>${currentQuestion.prompt_text}
+                <p style="white-space:pre-line">${currentQuestion.prompt_text}</p>
             </div>
             <div id="diff-area"></div>
             <div class="review-stats">
@@ -132,26 +122,16 @@ export default function WritingDiscussionPage(app) {
         if (currentQuestion.template_answer) {
             renderDiff(diffArea, answer, currentQuestion.template_answer);
         } else {
-            diffArea.innerHTML = `
-                <div class="card"><h3>My Answer</h3><p class="mt-8" style="line-height:1.8;white-space:pre-wrap">${answer}</p></div>
-            `;
+            diffArea.innerHTML = `<div class="card"><h3>My Answer</h3><p class="mt-8" style="line-height:1.8;white-space:pre-wrap">${answer}</p></div>`;
         }
 
         API.post(`/api/sessions/${Store.currentSession.id}/questions`, {
-            question_id: currentQuestion.id,
-            user_response: answer,
-            elapsed_seconds: elapsed,
-            word_count: words,
+            question_id: currentQuestion.id, user_response: answer,
+            elapsed_seconds: elapsed, word_count: words,
         }).catch(() => {});
 
-        document.getElementById("next-btn").addEventListener("click", () => {
-            timerCtrl = null;
-            loadNextQuestion();
-        });
-        document.getElementById("end-btn").addEventListener("click", () => {
-            Store.endSession();
-            renderMenu();
-        });
+        document.getElementById("next-btn").addEventListener("click", () => { timerCtrl = null; loadNextQuestion(); });
+        document.getElementById("end-btn").addEventListener("click", () => { Store.endSession(); renderMenu(); });
     }
 
     function renderDone() {
@@ -163,8 +143,7 @@ export default function WritingDiscussionPage(app) {
                 <button class="btn btn-primary mt-24" onclick="location.hash='#/'">홈으로</button>
             </div>
         `;
-        bindLogout();
-        Store.endSession();
+        bindLogout(); Store.endSession();
     }
 
     renderMenu();
