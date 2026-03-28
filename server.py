@@ -1,13 +1,20 @@
 import os
 import json
 import tempfile
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, UploadFile, File, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 import db
 import auth
 
-app = FastAPI(title="토플메이트")
+
+@asynccontextmanager
+async def lifespan(app):
+    db.init_db()
+    yield
+
+app = FastAPI(title="토플메이트", lifespan=lifespan)
 
 BASE_DIR = os.path.dirname(__file__)
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -202,13 +209,6 @@ async def index():
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-
-# --- Startup ---
-
-@app.on_event("startup")
-def startup():
-    db.init_db()
 
 
 if __name__ == "__main__":

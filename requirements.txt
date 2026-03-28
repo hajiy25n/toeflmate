@@ -1,8 +1,8 @@
-fastapi==0.135.2
-uvicorn==0.42.0
-openpyxl==3.1.5
-aiofiles==25.1.0
-bcrypt==5.0.0
-python-multipart==0.0.22
-python-docx==1.1.2
-pandas==2.2.3
+fastapi
+uvicorn[standard]
+openpyxl
+aiofiles
+bcrypt
+python-multipart
+python-docx
+pandas
