@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+toefl_db.sqlite
+uploads/*
+!uploads/.gitkeep
+.claude/

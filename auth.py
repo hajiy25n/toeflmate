@@ -1,0 +1,84 @@
+import uuid
+import bcrypt
+from db import get_conn, seed_sample_questions
+
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def verify_password(password: str, hashed: str) -> bool:
+    return bcrypt.checkpw(password.encode(), hashed.encode())
+
+
+def _save_session(token: str, user_id: int):
+    conn = get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO auth_sessions (token, user_id) VALUES (?, ?)",
+        (token, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def register(username: str, password: str) -> dict:
+    if len(username) < 2:
+        return {"ok": False, "error": "아이디는 2자 이상이어야 합니다."}
+    if len(password) < 4:
+        return {"ok": False, "error": "비밀번호는 4자 이상이어야 합니다."}
+
+    conn = get_conn()
+    existing = conn.execute(
+        "SELECT id FROM users WHERE username=?", (username,)
+    ).fetchone()
+    if existing:
+        conn.close()
+        return {"ok": False, "error": "이미 존재하는 아이디입니다."}
+
+    pw_hash = hash_password(password)
+    cur = conn.execute(
+        "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+        (username, pw_hash),
+    )
+    conn.commit()
+    user_id = cur.lastrowid
+    conn.close()
+
+    seed_sample_questions(user_id)
+
+    token = str(uuid.uuid4())
+    _save_session(token, user_id)
+    return {"ok": True, "token": token, "user_id": user_id, "username": username}
+
+
+def login(username: str, password: str) -> dict:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT id, password_hash FROM users WHERE username=?", (username,)
+    ).fetchone()
+    conn.close()
+
+    if not row or not verify_password(password, row["password_hash"]):
+        return {"ok": False, "error": "아이디 또는 비밀번호가 틀렸습니다."}
+
+    token = str(uuid.uuid4())
+    _save_session(token, row["id"])
+    return {"ok": True, "token": token, "user_id": row["id"], "username": username}
+
+
+def get_user_id(token: str) -> int | None:
+    if not token:
+        return None
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT user_id FROM auth_sessions WHERE token=?", (token,)
+    ).fetchone()
+    conn.close()
+    return row["user_id"] if row else None
+
+
+def logout(token: str):
+    conn = get_conn()
+    conn.execute("DELETE FROM auth_sessions WHERE token=?", (token,))
+    conn.commit()
+    conn.close()
