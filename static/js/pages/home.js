@@ -3,14 +3,9 @@ import { renderHeader, bindLogout } from "../components/nav.js";
 
 export default async function HomePage(app) {
     let counts = { speaking_interview: 0, writing_email: 0, writing_discussion: 0 };
-    let vocabCount = 0;
     try {
         const qs = await API.get("/api/questions");
         for (const q of qs) counts[q.type] = (counts[q.type] || 0) + 1;
-    } catch {}
-    try {
-        const cats = await API.get("/api/vocab/categories");
-        vocabCount = cats.reduce((s, c) => s + c.count, 0);
     } catch {}
 
     app.innerHTML = `
@@ -33,12 +28,6 @@ export default async function HomePage(app) {
                 <div class="home-card-title">Writing Discussion</div>
                 <div class="home-card-desc">토론 글 작성 연습</div>
                 <span class="home-card-count">${counts.writing_discussion}문제</span>
-            </div>
-            <div class="home-card" data-href="#/vocab">
-                <div class="home-card-icon">📚</div>
-                <div class="home-card-title">단어장</div>
-                <div class="home-card-desc">플래시카드로 TOEFL 단어 암기 & 연습</div>
-                <span class="home-card-count">${vocabCount}단어</span>
             </div>
             <div class="home-card" data-href="#/import">
                 <div class="home-card-icon">📥</div>

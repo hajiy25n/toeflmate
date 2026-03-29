@@ -7,7 +7,7 @@ import WritingEmailPage from "./pages/writing-email.js";
 import WritingDiscussionPage from "./pages/writing-discussion.js";
 import MemorizePage from "./pages/memorize.js";
 import ImportPage from "./pages/import.js";
-import VocabPage from "./pages/vocab.js";
+// import VocabPage from "./pages/vocab.js"; // 단어장 기능 비활성화
 
 const app = document.getElementById("app");
 
@@ -56,8 +56,8 @@ async function route() {
         MemorizePage(app, "writing_discussion");
     } else if (hash === "#/import") {
         ImportPage(app);
-    } else if (hash === "#/vocab") {
-        VocabPage(app);
+    // } else if (hash === "#/vocab") {
+    //     VocabPage(app); // 단어장 기능 비활성화
     } else {
         location.hash = "#/";
     }
