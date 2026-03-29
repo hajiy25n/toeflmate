@@ -4,12 +4,82 @@ from datetime import datetime
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "toefl_db.sqlite")
 
+# Turso (remote SQLite) support: set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN env vars
+TURSO_URL = os.environ.get("TURSO_DATABASE_URL", "")
+TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "")
+
+_USE_TURSO = bool(TURSO_URL)
+
+
+class _DictCursor:
+    """Wraps libsql cursor to return dict rows (like sqlite3.Row)."""
+    def __init__(self, cursor):
+        self._cur = cursor
+
+    def _to_dict(self, row):
+        if row is None:
+            return None
+        desc = self._cur.description
+        if desc:
+            return {desc[i][0]: row[i] for i in range(len(desc))}
+        return row
+
+    def fetchone(self):
+        row = self._cur.fetchone()
+        return self._to_dict(row)
+
+    def fetchall(self):
+        return [self._to_dict(r) for r in self._cur.fetchall()]
+
+    @property
+    def lastrowid(self):
+        return self._cur.lastrowid
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+    @property
+    def description(self):
+        return self._cur.description
+
+
+class _TursoConn:
+    """Wraps libsql connection to return dict rows."""
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, params=()):
+        cur = self._conn.execute(sql, params)
+        return _DictCursor(cur)
+
+    def executescript(self, script):
+        for stmt in script.split(";"):
+            stmt = stmt.strip()
+            if stmt and not stmt.startswith("--"):
+                try:
+                    self._conn.execute(stmt)
+                except Exception:
+                    pass
+        self._conn.commit()
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
 
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    if _USE_TURSO:
+        import libsql_experimental as libsql
+        raw = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+        return _TursoConn(raw)
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
 
 
 def init_db():
@@ -231,13 +301,10 @@ def pick_next_question(user_id: int, qtype: str, exclude_ids: list[int]):
     placeholders = ",".join("?" for _ in exclude_ids) if exclude_ids else "0"
     row = conn.execute(
         f"""SELECT q.* FROM questions q
-            LEFT JOIN question_history h ON h.question_id = q.id AND h.user_id = ?
             WHERE q.user_id = ? AND q.type = ? AND q.id NOT IN ({placeholders})
-            ORDER BY COALESCE(h.times_seen, 0) ASC,
-                     COALESCE(h.last_seen_at, '1970-01-01') ASC,
-                     RANDOM()
+            ORDER BY RANDOM()
             LIMIT 1""",
-        (user_id, user_id, qtype, *exclude_ids),
+        (user_id, qtype, *exclude_ids),
     ).fetchone()
     conn.close()
     return dict(row) if row else None

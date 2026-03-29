@@ -4,3 +4,6 @@ toefl_db.sqlite
 uploads/*
 !uploads/.gitkeep
 .claude/
+.DS_Store
+.tts_cache/
+test_vocab*.jpg

@@ -1,11 +1,11 @@
 services:
   - type: web
     name: toeflmate
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
-    envVars:
-      - key: PYTHON_VERSION
-        value: "3.11.6"
+    runtime: docker
     plan: free
     autoDeploy: true
+    envVars:
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
