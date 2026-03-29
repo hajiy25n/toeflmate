@@ -10,4 +10,3 @@ pytesseract
 Pillow
 libsql-experimental
 python-docx
-pandas

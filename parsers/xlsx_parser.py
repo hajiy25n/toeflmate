@@ -1,4 +1,4 @@
-import pandas as pd
+from openpyxl import load_workbook
 
 COLUMN_ALIASES = {
     "question": "prompt_text",
@@ -29,27 +29,38 @@ COLUMN_ALIASES = {
 
 
 def parse_xlsx(file_path: str) -> list[dict]:
-    df = pd.read_excel(file_path, engine="openpyxl")
-    normalized = {}
-    for col in df.columns:
-        key = col.strip().lower().replace(" ", "_")
-        mapped = COLUMN_ALIASES.get(key, key)
-        normalized[col] = mapped
-    df = df.rename(columns=normalized)
+    wb = load_workbook(file_path, read_only=True, data_only=True)
+    ws = wb.active
 
-    required = ["prompt_text"]
-    for r in required:
-        if r not in df.columns:
-            raise ValueError(f"필수 컬럼 '{r}'을 찾을 수 없습니다. 컬럼명을 확인해주세요.")
+    # Read header row and map to standard column names
+    raw_headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+    headers = []
+    for h in raw_headers:
+        if h is None:
+            headers.append(None)
+            continue
+        key = str(h).strip().lower().replace(" ", "_")
+        headers.append(COLUMN_ALIASES.get(key, key))
 
-    df = df.where(pd.notna(df), None)
-    rows = df.to_dict(orient="records")
+    if "prompt_text" not in headers:
+        wb.close()
+        raise ValueError("필수 컬럼 'prompt_text'을 찾을 수 없습니다. 컬럼명을 확인해주세요.")
 
-    for row in rows:
-        if not row.get("type"):
-            row["type"] = "speaking_interview"
-        row["prompt_text"] = str(row["prompt_text"]).strip() if row.get("prompt_text") else ""
-        if row.get("template_answer"):
-            row["template_answer"] = str(row["template_answer"]).strip()
+    # Read data rows
+    rows = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        record = {}
+        for i, val in enumerate(row):
+            if i < len(headers) and headers[i]:
+                record[headers[i]] = val if val is not None else None
+        if not record.get("prompt_text"):
+            continue
+        if not record.get("type"):
+            record["type"] = "speaking_interview"
+        record["prompt_text"] = str(record["prompt_text"]).strip()
+        if record.get("template_answer"):
+            record["template_answer"] = str(record["template_answer"]).strip()
+        rows.append(record)
 
+    wb.close()
     return rows
