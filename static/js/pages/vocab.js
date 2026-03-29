@@ -250,25 +250,7 @@ export default function VocabPage(app) {
             </div>
             <div style="font-size:0.9rem;color:var(--text-muted);margin-bottom:8px">${allWords.length}개 단어</div>
             <div id="word-list">
-                ${allWords.map(w => {
-                    const syns = parseSynonyms(w);
-                    return `
-                    <div class="card mb-8" style="padding:14px 18px">
-                        <div class="flex justify-between items-center">
-                            <div style="flex:1">
-                                <strong>${w.word}</strong>
-                                ${w.part_of_speech ? `<span class="text-muted" style="font-size:0.8rem;margin-left:6px">(${w.part_of_speech})</span>` : ""}
-                                ${w.mastered ? `<span style="color:var(--success);font-size:0.75rem;margin-left:4px">✓</span>` : ""}
-                                <div class="text-muted" style="font-size:0.9rem;margin-top:2px">${w.meaning}</div>
-                                ${syns.length ? `<div style="font-size:0.8rem;color:var(--text-dim);margin-top:2px">유사어: ${syns.map(s => s.word + (s.meaning ? ` (${s.meaning})` : "")).join(", ")}</div>` : ""}
-                            </div>
-                            <div class="flex gap-8" style="flex-shrink:0">
-                                <button class="btn btn-sm btn-secondary edit-vocab" data-id="${w.id}">수정</button>
-                                <button class="btn btn-sm btn-danger del-vocab" data-id="${w.id}">삭제</button>
-                            </div>
-                        </div>
-                    </div>
-                `}).join("")}
+                ${renderWordList(allWords)}
             </div>
         `;
         bindLogout();
@@ -295,6 +277,51 @@ export default function VocabPage(app) {
                 try { await API.del(`/api/vocab/${btn.dataset.id}`); renderManage(); } catch {}
             });
         });
+    }
+
+    function renderWordList(wordsList) {
+        if (!wordsList.length) return '<p class="text-muted" style="font-size:0.9rem">등록된 단어가 없습니다.</p>';
+
+        // Group by category when viewing all
+        if (!currentCategory) {
+            const grouped = {};
+            for (const w of wordsList) {
+                const cat = w.category || "default";
+                if (!grouped[cat]) grouped[cat] = [];
+                grouped[cat].push(w);
+            }
+            const cats = Object.keys(grouped).sort();
+            return cats.map(cat => `
+                <div style="margin-top:12px">
+                    <div style="font-size:0.85rem;font-weight:600;color:var(--accent);padding:6px 0;border-bottom:1px solid var(--border);margin-bottom:6px">
+                        ${cat} <span style="font-weight:400;color:var(--text-muted)">(${grouped[cat].length}개)</span>
+                    </div>
+                    ${grouped[cat].map(w => renderWordCard(w)).join("")}
+                </div>
+            `).join("");
+        }
+        return wordsList.map(w => renderWordCard(w)).join("");
+    }
+
+    function renderWordCard(w) {
+        const syns = parseSynonyms(w);
+        return `
+            <div class="card mb-8" style="padding:14px 18px">
+                <div class="flex justify-between items-center">
+                    <div style="flex:1">
+                        <strong>${w.word}</strong>
+                        ${w.part_of_speech ? `<span class="text-muted" style="font-size:0.8rem;margin-left:6px">(${w.part_of_speech})</span>` : ""}
+                        ${w.mastered ? `<span style="color:var(--success);font-size:0.75rem;margin-left:4px">✓</span>` : ""}
+                        <div class="text-muted" style="font-size:0.9rem;margin-top:2px">${w.meaning}</div>
+                        ${syns.length ? `<div style="font-size:0.8rem;color:var(--text-dim);margin-top:2px">유사어: ${syns.map(s => s.word + (s.meaning ? ` (${s.meaning})` : "")).join(", ")}</div>` : ""}
+                    </div>
+                    <div class="flex gap-8" style="flex-shrink:0">
+                        <button class="btn btn-sm btn-secondary edit-vocab" data-id="${w.id}">수정</button>
+                        <button class="btn btn-sm btn-danger del-vocab" data-id="${w.id}">삭제</button>
+                    </div>
+                </div>
+            </div>
+        `;
     }
 
     function renderAddForm() {
@@ -430,14 +457,21 @@ export default function VocabPage(app) {
     async function buildSynonymsWithMeanings(raw) {
         if (!raw) return "";
         const synWords = raw.split(",").map(s => s.trim()).filter(Boolean);
+        if (!synWords.length) return "";
+        // Batch translate all at once (parallel on server)
+        try {
+            const res = await API.post("/api/dictionary/batch", { words: synWords });
+            if (res.ok && res.results) {
+                return JSON.stringify(res.results.map(r => ({ word: r.word, meaning_ko: r.meaning_ko, meaning: r.meaning_ko })));
+            }
+        } catch {}
+        // Fallback: sequential
         const result = [];
         for (const sw of synWords) {
             let meaning = "";
             try {
                 const res = await API.get(`/api/dictionary/${encodeURIComponent(sw)}`);
-                if (res.ok && res.meaning_ko) {
-                    meaning = res.meaning_ko;
-                }
+                if (res.ok && res.meaning_ko) meaning = res.meaning_ko;
             } catch {}
             result.push({ word: sw, meaning });
         }

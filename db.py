@@ -10,6 +10,25 @@ TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "")
 
 _USE_TURSO = bool(TURSO_URL)
 
+# Module-level cached connections (reused across requests)
+_turso_conn = None
+_sqlite_conn = None
+
+# In-memory session cache for fast auth lookups
+_session_cache = {}  # token -> user_id
+
+
+def cache_session(token, user_id):
+    _session_cache[token] = user_id
+
+
+def get_cached_session(token):
+    return _session_cache.get(token)
+
+
+def invalidate_session(token):
+    _session_cache.pop(token, None)
+
 
 class _DictCursor:
     """Wraps libsql cursor to return dict rows (like sqlite3.Row)."""
@@ -67,19 +86,42 @@ class _TursoConn:
         self._conn.commit()
 
     def close(self):
-        self._conn.close()
+        pass  # Shared connection, don't close
+
+
+class _LocalConn:
+    """Wraps local sqlite3 connection with a no-op close() for connection reuse."""
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, params=()):
+        return self._conn.execute(sql, params)
+
+    def executescript(self, script):
+        return self._conn.executescript(script)
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        pass  # Shared connection, don't close
 
 
 def get_conn():
+    global _turso_conn, _sqlite_conn
     if _USE_TURSO:
-        import libsql_experimental as libsql
-        raw = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
-        return _TursoConn(raw)
+        if _turso_conn is None:
+            import libsql_experimental as libsql
+            raw = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+            _turso_conn = _TursoConn(raw)
+        return _turso_conn
     else:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+        if _sqlite_conn is None:
+            conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            _sqlite_conn = _LocalConn(conn)
+        return _sqlite_conn
 
 
 def init_db():

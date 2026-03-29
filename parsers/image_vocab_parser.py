@@ -1,29 +1,16 @@
 """
-Parse vocabulary images (like TOEFL vocab book pages) using OCR.
-Uses EasyOCR (deep learning) for best Korean+English recognition.
-Falls back to tesseract or OCR.space if unavailable.
+Parse vocabulary images (TOEFL vocab book pages) using OCR.
+Uses OCR.space API with spatial/overlay analysis for table layouts.
+Falls back to tesseract if available.
 """
 import re
 import os
 
 
-# Lazy-loaded EasyOCR reader (heavy model, load once)
-_easyocr_reader = None
-
-
-def _get_easyocr_reader():
-    global _easyocr_reader
-    if _easyocr_reader is None:
-        import easyocr
-        _easyocr_reader = easyocr.Reader(["ko", "en"], gpu=False)
-    return _easyocr_reader
-
-
 def parse_vocab_image(image_path: str) -> list[dict]:
-    """Main entry: try EasyOCR first, then tesseract, then OCR.space."""
+    """Main entry: fix EXIF, then try OCR.space (overlay), then tesseract."""
     from PIL import Image, ImageOps
 
-    # Fix EXIF orientation
     img = Image.open(image_path)
     try:
         img = ImageOps.exif_transpose(img)
@@ -32,24 +19,35 @@ def parse_vocab_image(image_path: str) -> list[dict]:
     if img.mode != "RGB":
         img = img.convert("RGB")
 
-    # Save orientation-fixed image for OCR
+    # Resize if too large (OCR.space free has 1MB limit)
+    w, h = img.size
+    if w > 2000 or h > 2000:
+        ratio = min(2000 / w, 2000 / h)
+        img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+
     fixed_path = image_path + ".fixed.jpg"
-    img.save(fixed_path, "JPEG", quality=95)
+    img.save(fixed_path, "JPEG", quality=85)
 
     try:
-        # Try EasyOCR (best quality)
-        words = _try_easyocr(fixed_path, img)
+        # Try OCR.space with overlay (spatial parsing for tables)
+        words = _try_ocr_space_overlay(fixed_path)
         if len(words) >= 2:
             return words
+
+        # Try rotated 90° (landscape phone photo)
+        rotated = img.rotate(90, expand=True)
+        rot_path = image_path + ".rot.jpg"
+        rotated.save(rot_path, "JPEG", quality=85)
+        try:
+            words = _try_ocr_space_overlay(rot_path)
+            if len(words) >= 2:
+                return words
+        finally:
+            _safe_remove(rot_path)
 
         # Fallback: tesseract
-        words = _try_tesseract(fixed_path)
+        words = _try_tesseract(fixed_path, img)
         if len(words) >= 2:
-            return words
-
-        # Fallback: OCR.space
-        words = _try_ocr_space(fixed_path)
-        if words:
             return words
 
         return words
@@ -57,291 +55,238 @@ def parse_vocab_image(image_path: str) -> list[dict]:
         _safe_remove(fixed_path)
 
 
-def _try_easyocr(image_path: str, img) -> list[dict]:
-    """OCR with EasyOCR + spatial analysis for table layout."""
+def _try_ocr_space_overlay(image_path: str) -> list[dict]:
+    """OCR.space with overlay data for spatial table reconstruction."""
     try:
-        reader = _get_easyocr_reader()
-    except (ImportError, Exception) as e:
-        print(f"[OCR] EasyOCR unavailable: {e}")
+        import httpx
+    except ImportError:
         return []
 
-    import numpy as np
-    img_array = np.array(img)
-    img_h, img_w = img_array.shape[:2]
+    with open(image_path, "rb") as f:
+        file_data = f.read()
 
+    fname = os.path.basename(image_path)
     best_words = []
 
-    # Try original and 90° rotation (for landscape photos)
-    for rotation in [0, 90]:
-        if rotation:
-            rot_img = img.rotate(rotation, expand=True)
-            arr = np.array(rot_img)
-        else:
-            arr = img_array
-
+    for engine in ["2", "1"]:
         try:
-            results = reader.readtext(arr, paragraph=False)
+            with httpx.Client(timeout=30.0) as client:
+                resp = client.post(
+                    "https://api.ocr.space/parse/image",
+                    files={"file": (fname, file_data, "image/jpeg")},
+                    data={
+                        "apikey": "helloworld",
+                        "language": "kor",
+                        "isOverlayRequired": "true",
+                        "detectOrientation": "true",
+                        "scale": "true",
+                        "isTable": "true",
+                        "OCREngine": engine,
+                    },
+                )
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                results = data.get("ParsedResults", [])
+                if not results:
+                    continue
+
+                # Try spatial parsing from overlay
+                overlay = results[0].get("TextOverlay", {})
+                if overlay and overlay.get("Lines"):
+                    words = _parse_overlay_spatial(overlay)
+                    if len(words) > len(best_words):
+                        best_words = words
+                        if len(words) >= 5:
+                            return words
+
+                # Fallback: plain text
+                text = results[0].get("ParsedText", "")
+                if text.strip():
+                    words = _parse_plain_text(text)
+                    if len(words) > len(best_words):
+                        best_words = words
+                        if len(words) >= 5:
+                            return words
         except Exception as e:
-            print(f"[OCR] EasyOCR error: {e}")
+            print(f"[OCR] OCR.space engine {engine} error: {e}")
             continue
-
-        if not results:
-            continue
-
-        words = _parse_easyocr_spatial(results)
-        if len(words) > len(best_words):
-            best_words = words
-            if len(words) >= 5:
-                return words
 
     return best_words
 
 
-def _parse_easyocr_spatial(results: list) -> list[dict]:
+def _parse_overlay_spatial(overlay: dict) -> list[dict]:
     """
-    Parse EasyOCR results using spatial position to reconstruct table rows.
-    Each result: (bbox, text, confidence)
-    bbox: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+    Parse OCR.space overlay using word positions to reconstruct table columns.
+    Vocab book table: Number | English Word | (POS) | Korean Meaning | Synonyms
     """
-    if not results:
+    lines = overlay.get("Lines", [])
+    if not lines:
         return []
 
-    # Extract items with position
-    items = []
-    for bbox, text, conf in results:
-        text = text.strip()
-        if not text or len(text) < 1:
-            continue
-        # Get center Y and left X
-        ys = [p[1] for p in bbox]
-        xs = [p[0] for p in bbox]
-        cy = sum(ys) / len(ys)
-        lx = min(xs)
-        h = max(ys) - min(ys)
-        items.append({
-            "text": text,
-            "cy": cy,
-            "lx": lx,
-            "height": h,
-            "conf": conf,
-        })
+    # Collect all words with bounding boxes
+    all_words = []
+    for line in lines:
+        for word_info in line.get("Words", []):
+            text = word_info.get("WordText", "").strip()
+            if not text:
+                continue
+            left = word_info.get("Left", 0)
+            top = word_info.get("Top", 0)
+            width = word_info.get("Width", 0)
+            height = word_info.get("Height", 0)
+            cy = top + height / 2
+            all_words.append({
+                "text": text,
+                "left": left,
+                "top": top,
+                "cy": cy,
+                "width": width,
+                "height": height,
+            })
 
-    if not items:
+    if not all_words:
         return []
 
     # Sort by vertical position
-    items.sort(key=lambda x: x["cy"])
+    all_words.sort(key=lambda w: w["cy"])
 
-    # Group into rows (items with similar Y position)
+    # Group into rows (words at similar Y)
+    median_h = sorted(w["height"] for w in all_words if w["height"] > 0)[len(all_words) // 2] if all_words else 15
+    threshold = max(median_h * 0.7, 8)
+
     rows = []
-    median_h = sorted([it["height"] for it in items if it["height"] > 0])[len(items) // 2] if items else 20
-    threshold = max(median_h * 0.6, 10)
-
-    current_row = [items[0]]
-    for it in items[1:]:
-        if abs(it["cy"] - current_row[-1]["cy"]) < threshold:
-            current_row.append(it)
+    current_row = [all_words[0]]
+    for w in all_words[1:]:
+        if abs(w["cy"] - current_row[-1]["cy"]) < threshold:
+            current_row.append(w)
         else:
             rows.append(current_row)
-            current_row = [it]
+            current_row = [w]
     rows.append(current_row)
 
-    # Sort each row by X position (left to right)
+    # Sort each row left-to-right
     for row in rows:
-        row.sort(key=lambda x: x["lx"])
+        row.sort(key=lambda w: w["left"])
 
-    # Now parse rows into vocabulary entries
-    # Vocab book format: number | English word | (POS) | Korean meaning | synonyms
+    # Now identify columns by analyzing X positions across all rows
+    # Find rows that start with a number (entry rows)
     entries = []
     current = None
 
     for row in rows:
-        row_text = " ".join(it["text"] for it in row)
+        row_text = " ".join(w["text"] for w in row)
 
-        # Skip noise lines
+        # Skip noise
         if len(row_text.strip()) < 2:
+            continue
+        if re.search(r"(TOEFL|voca|BOB|page\s*\d+|vocabulary)", row_text, re.IGNORECASE):
             continue
         if re.match(r"^[-~—=_*#|]+$", row_text.strip()):
             continue
-        # Skip title/header lines
-        if re.search(r"(TOEFL|voca|BOB|TOEEL|page\s*\d+|vocabulary)", row_text, re.IGNORECASE):
-            continue
-        if re.match(r"^(\d+[-—]\d*[-—]?|[oO0°©®]+)\s*$", row_text):
-            continue
 
-        # Check if row starts with a number (new entry)
-        num_match = re.match(r"^(\d{1,3})\s*[.):\s]*(.+)", row_text)
-        if num_match:
-            rest = num_match.group(2).strip()
-            # Split rest into English and Korean parts
-            eng_parts, kor_parts, pos, syn_parts = _split_mixed_text(rest, row)
+        # Separate words into categories by content
+        eng_words = []
+        kor_words = []
+        num_prefix = None
+        pos_text = ""
 
-            if eng_parts:
-                if current and current.get("word"):
-                    entries.append(current)
-                current = {
-                    "word": eng_parts,
-                    "meaning": kor_parts,
-                    "part_of_speech": pos,
-                    "synonyms": syn_parts,
-                    "example_sentence": "",
-                }
+        for w in row:
+            t = w["text"].strip()
+            if not t:
                 continue
 
-        if not current:
-            # Maybe a standalone English word line
-            if re.match(r"^[A-Za-z]", row_text) and len(row_text) < 40:
+            # Number at very start
+            if num_prefix is None and re.match(r"^\d{1,3}[.)]*$", t):
+                num_prefix = t
+                continue
+
+            # POS in parentheses
+            pos_match = re.match(r"^\(?(?:n|v|adj|adv|prep|conj|phr|phrase)\.?(?:/(?:n|v|adj|adv)\.?)?\)?$", t, re.IGNORECASE)
+            if pos_match:
+                pos_text = t.strip("()")
+                continue
+
+            has_kor = bool(re.search(r"[가-힣]", t))
+            has_eng = bool(re.search(r"[A-Za-z]{2,}", t))
+
+            if has_kor:
+                kor_words.append(t)
+            elif has_eng:
+                eng_words.append(t)
+            elif re.match(r"^[~=,.:;/]+$", t):
+                continue  # punctuation
+            else:
+                # Mixed or unclear - check ratio
+                kor_chars = len(re.findall(r"[가-힣]", t))
+                eng_chars = len(re.findall(r"[A-Za-z]", t))
+                if kor_chars > eng_chars:
+                    kor_words.append(t)
+                elif eng_chars > 0:
+                    eng_words.append(t)
+
+        # Decide if this is a new entry or continuation
+        if num_prefix and eng_words:
+            # New numbered entry
+            if current and current.get("word"):
+                entries.append(current)
+            current = {
+                "word": " ".join(eng_words),
+                "meaning": " ".join(kor_words),
+                "part_of_speech": pos_text,
+                "synonyms": "",
+                "example_sentence": "",
+            }
+        elif current:
+            # Continuation of previous entry
+            if kor_words and not current["meaning"]:
+                current["meaning"] = " ".join(kor_words)
+            elif kor_words and current["meaning"]:
+                # Could be additional meaning line
+                current["meaning"] += ", " + " ".join(kor_words)
+
+            if eng_words:
+                # Check if these are synonyms (= prefix or comma-separated)
+                eng_text = " ".join(eng_words)
+                if re.match(r"^[=]\s*", eng_text) or (current["meaning"] and not current["synonyms"]):
+                    syn = re.sub(r"^[=]\s*", "", eng_text)
+                    if not current["synonyms"]:
+                        current["synonyms"] = syn
+                    else:
+                        current["synonyms"] += ", " + syn
+                elif not current["word"]:
+                    current["word"] = eng_text
+
+            if pos_text and not current["part_of_speech"]:
+                current["part_of_speech"] = pos_text
+        else:
+            # No current entry, start one if we have English text
+            if eng_words:
                 current = {
-                    "word": row_text.strip(),
-                    "meaning": "",
-                    "part_of_speech": "",
+                    "word": " ".join(eng_words),
+                    "meaning": " ".join(kor_words),
+                    "part_of_speech": pos_text,
                     "synonyms": "",
                     "example_sentence": "",
                 }
-            continue
-
-        # Check what this row contains
-        has_korean = bool(re.search(r"[가-힣]", row_text))
-        has_english = bool(re.search(r"[A-Za-z]{2,}", row_text))
-
-        # Part of speech line
-        pos_match = re.match(
-            r"^\(?(n\.?(?:/[a-z]+\.?)?|v\.?(?:/[a-z]+\.?)?|adj\.?|adv\.?|prep\.?|conj\.?|phrase|phr\.?)\)?\s*(.*)",
-            row_text, re.IGNORECASE,
-        )
-        if pos_match and not current["part_of_speech"]:
-            current["part_of_speech"] = pos_match.group(1).strip()
-            rest = pos_match.group(2).strip()
-            if rest and re.search(r"[가-힣]", rest) and not current["meaning"]:
-                current["meaning"] = rest
-            continue
-
-        # Korean meaning
-        if has_korean and not current["meaning"]:
-            current["meaning"] = row_text.strip()
-            continue
-        elif has_korean and current["meaning"] and len(current["meaning"]) < 30:
-            current["meaning"] += ", " + row_text.strip()
-            continue
-
-        # Synonyms (comma-separated English words or = prefix)
-        syn_match = re.match(r"^(?:=|syn[.:]\s*|synonym[s]?[.:]\s*)(.+)", row_text, re.IGNORECASE)
-        if syn_match:
-            current["synonyms"] = syn_match.group(1).strip()
-            continue
-
-        if has_english and not has_korean and "," in row_text and len(row_text) < 80:
-            parts = [p.strip() for p in row_text.split(",")]
-            if all(re.match(r"^[A-Za-z\s]+$", p) for p in parts if p):
-                if not current["synonyms"]:
-                    current["synonyms"] = row_text.strip()
-                else:
-                    current["synonyms"] += ", " + row_text.strip()
-                continue
-
-        # English synonyms (short, no comma)
-        if has_english and not has_korean and len(row_text) < 40:
-            if not current["synonyms"]:
-                current["synonyms"] = row_text.strip()
-            continue
-
-        # Example sentence
-        if re.match(r"^[A-Z].*[.?!]$", row_text) and len(row_text) > 20:
-            if not current["example_sentence"]:
-                current["example_sentence"] = row_text
-            continue
 
     if current and current.get("word"):
         entries.append(current)
 
-    # Quality filter
     return _quality_filter(entries)
 
 
-def _split_mixed_text(text: str, row_items: list) -> tuple:
-    """Split a mixed Korean+English text into word, meaning, POS, synonyms."""
-    eng_parts = []
-    kor_parts = []
-    pos = ""
-    syn_parts = []
-
-    # Check for POS in parentheses
-    pos_match = re.search(r"\((\w+\.?(?:/\w+\.?)?)\)", text)
-    if pos_match:
-        pos_text = pos_match.group(1)
-        if re.match(r"^(n|v|adj|adv|prep|conj|phrase|phr)\.?", pos_text, re.IGNORECASE):
-            pos = pos_text
-            text = text[:pos_match.start()] + text[pos_match.end():]
-
-    # Split by Korean/English boundaries using individual items
-    for it in row_items:
-        t = it["text"].strip()
-        if not t:
-            continue
-        # Skip if it's a number at the start
-        if re.match(r"^\d{1,3}[.)\s]*$", t):
-            continue
-        # Skip POS we already extracted
-        if pos and t.strip("()") == pos:
-            continue
-
-        has_kor = bool(re.search(r"[가-힣]", t))
-        has_eng = bool(re.search(r"[A-Za-z]", t))
-
-        if has_kor and not has_eng:
-            kor_parts.append(t)
-        elif has_eng and not has_kor:
-            # If we already have Korean parts, this might be synonyms
-            if kor_parts:
-                syn_parts.append(t)
-            else:
-                eng_parts.append(t)
-        elif has_kor and has_eng:
-            # Mixed - try to split
-            mixed = re.split(r"(?<=[가-힣])\s+(?=[A-Za-z])|(?<=[A-Za-z])\s+(?=[가-힣])", t)
-            for part in mixed:
-                if re.search(r"[가-힣]", part):
-                    kor_parts.append(part.strip())
-                elif re.search(r"[A-Za-z]", part):
-                    if kor_parts:
-                        syn_parts.append(part.strip())
-                    else:
-                        eng_parts.append(part.strip())
-
-    word = " ".join(eng_parts).strip()
-    meaning = " ".join(kor_parts).strip()
-    synonyms = ", ".join(syn_parts).strip()
-
-    # If no separate parts found, try splitting the original text
-    if not word:
-        # Fallback: take everything before first Korean char
-        m = re.match(r"^([A-Za-z\s]+)", text.strip())
-        if m:
-            word = m.group(1).strip()
-            rest = text[m.end():].strip()
-            if re.search(r"[가-힣]", rest):
-                meaning = rest
-
-    return word, meaning, pos, synonyms
-
-
-def _try_tesseract(image_path: str) -> list[dict]:
+def _try_tesseract(image_path: str, img) -> list[dict]:
     """Fallback OCR with local tesseract."""
     try:
-        from PIL import Image
         import pytesseract
     except ImportError:
         return []
 
-    img = Image.open(image_path)
-    if img.mode != "RGB":
-        img = img.convert("RGB")
-
     best_words = []
-
     for rotation in [0, 90]:
         rotated = img.rotate(rotation, expand=True) if rotation else img
-        for psm in [6, 3, 4]:
+        for psm in [6, 3]:
             try:
                 text = pytesseract.image_to_string(
                     rotated, lang="kor+eng",
@@ -354,98 +299,13 @@ def _try_tesseract(image_path: str) -> list[dict]:
                         return words
             except Exception:
                 continue
-
     return best_words
-
-
-def _try_ocr_space(image_path: str) -> list[dict]:
-    """Fallback OCR using OCR.space free API with overlay data."""
-    try:
-        import httpx
-    except ImportError:
-        return []
-
-    try:
-        with open(image_path, "rb") as f:
-            file_data = f.read()
-    except Exception:
-        return []
-
-    best_words = []
-    fname = os.path.basename(image_path)
-
-    for engine, lang in [("2", "kor"), ("1", "kor")]:
-        try:
-            with httpx.Client(timeout=30.0) as client:
-                resp = client.post(
-                    "https://api.ocr.space/parse/image",
-                    files={"file": (fname, file_data, "image/jpeg")},
-                    data={
-                        "apikey": "helloworld",
-                        "language": lang,
-                        "isOverlayRequired": "true",
-                        "detectOrientation": "true",
-                        "scale": "true",
-                        "isTable": "true",
-                        "OCREngine": engine,
-                    },
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    results = data.get("ParsedResults", [])
-                    if results:
-                        # Try spatial parsing from overlay
-                        overlay = results[0].get("TextOverlay", {})
-                        if overlay and overlay.get("Lines"):
-                            words = _parse_ocr_space_overlay(overlay)
-                            if len(words) > len(best_words):
-                                best_words = words
-                                if len(words) >= 5:
-                                    return words
-
-                        # Fallback to plain text parsing
-                        text = results[0].get("ParsedText", "")
-                        if text.strip():
-                            words = _parse_plain_text(text)
-                            if len(words) > len(best_words):
-                                best_words = words
-                                if len(words) >= 5:
-                                    return words
-        except Exception:
-            continue
-
-    return best_words
-
-
-def _parse_ocr_space_overlay(overlay: dict) -> list[dict]:
-    """Parse OCR.space overlay data using spatial positions."""
-    lines_data = overlay.get("Lines", [])
-    if not lines_data:
-        return []
-
-    # Build rows from overlay lines
-    rows = []
-    for line in lines_data:
-        words = line.get("Words", [])
-        if not words:
-            continue
-        text = " ".join(w.get("WordText", "") for w in words)
-        top = line.get("MinTop", words[0].get("Top", 0))
-        rows.append({"text": text.strip(), "top": top})
-
-    # Sort by vertical position
-    rows.sort(key=lambda r: r["top"])
-
-    # Join all text and parse
-    full_text = "\n".join(r["text"] for r in rows)
-    return _parse_plain_text(full_text)
 
 
 def _parse_plain_text(text: str) -> list[dict]:
-    """Parse plain OCR text into structured vocabulary entries."""
+    """Parse plain OCR text line-by-line into vocab entries."""
     words = []
     lines = [l.strip() for l in text.strip().split("\n") if l.strip()]
-
     current = None
 
     for line in lines:
@@ -453,40 +313,36 @@ def _parse_plain_text(text: str) -> list[dict]:
             continue
         if re.match(r"^[-~—=_*#|]+$", line):
             continue
-        if re.match(r"^(voca|TOEFL|BOB|TOEEL|TOEEI|page|\d+[-—]\d*[-—]?|[oO0°©®]+)$", line, re.IGNORECASE):
+        if re.search(r"(TOEFL|voca|BOB|page\s*\d+|vocabulary)", line, re.IGNORECASE):
             continue
 
-        # Pattern: "27 Shed light on" or "27. Shed light on"
+        # Numbered entry: "27 Shed light on" or "27. Shed light on (phr.)"
         num_match = re.match(r"^(\d{1,3})[.):\s]+(.+)", line)
         if num_match:
-            word_text = num_match.group(2).strip()
-            if len(word_text) >= 2 and re.search(r"[A-Za-z]", word_text):
+            rest = num_match.group(2).strip()
+            if len(rest) >= 2 and re.search(r"[A-Za-z]", rest):
                 if current and current.get("word"):
                     words.append(current)
 
-                # Split English and Korean parts
-                eng, kor, pos = "", "", ""
-                pos_match = re.search(r"\((\w+\.?(?:/\w+\.?)?)\)", word_text)
-                if pos_match:
-                    p = pos_match.group(1)
-                    if re.match(r"^(n|v|adj|adv|prep|conj|phrase|phr)\.?", p, re.IGNORECASE):
-                        pos = p
-                        word_text = word_text[:pos_match.start()] + word_text[pos_match.end():]
+                # Extract POS if inline
+                pos = ""
+                pos_m = re.search(r"\((\w+\.?(?:/\w+\.?)?)\)\s*$", rest)
+                if pos_m and re.match(r"^(n|v|adj|adv|prep|conj|phrase|phr)", pos_m.group(1), re.IGNORECASE):
+                    pos = pos_m.group(1)
+                    rest = rest[:pos_m.start()].strip()
 
-                # Try to split by Korean/English boundary
-                kor_match = re.search(r"[가-힣]", word_text)
-                if kor_match:
-                    eng = word_text[:kor_match.start()].strip()
-                    kor = word_text[kor_match.start():].strip()
+                # Split Korean from English
+                kor_m = re.search(r"[가-힣]", rest)
+                if kor_m:
+                    eng = rest[:kor_m.start()].strip()
+                    kor = rest[kor_m.start():].strip()
                 else:
-                    eng = word_text.strip()
+                    eng = rest
+                    kor = ""
 
                 current = {
-                    "word": eng,
-                    "meaning": kor,
-                    "part_of_speech": pos,
-                    "synonyms": "",
-                    "example_sentence": "",
+                    "word": eng, "meaning": kor, "part_of_speech": pos,
+                    "synonyms": "", "example_sentence": "",
                 }
                 continue
 
@@ -495,19 +351,19 @@ def _parse_plain_text(text: str) -> list[dict]:
                 current = {"word": line.strip(), "meaning": "", "part_of_speech": "", "synonyms": "", "example_sentence": ""}
             continue
 
-        # Part of speech
+        # POS line
         pos_match = re.match(
-            r"^\(?(n\.?(?:/[a-z]+\.?)?|v\.?(?:/[a-z]+\.?)?|adj\.?|adv\.?|prep\.?|conj\.?|phrase|phr\.?)\)?\s*(.*)",
+            r"^\(?(n\.?(?:/\w+\.?)?|v\.?(?:/\w+\.?)?|adj\.?|adv\.?|prep\.?|conj\.?|phrase|phr\.?)\)?\s*(.*)",
             line, re.IGNORECASE,
         )
         if pos_match and not current["part_of_speech"]:
             current["part_of_speech"] = pos_match.group(1).strip()
             rest = pos_match.group(2).strip()
-            if rest and re.search(r"[가-힣]", rest):
+            if rest and re.search(r"[가-힣]", rest) and not current["meaning"]:
                 current["meaning"] = rest
             continue
 
-        # Korean text → meaning
+        # Korean → meaning
         if re.search(r"[가-힣]", line):
             if not current["meaning"]:
                 current["meaning"] = line
@@ -530,13 +386,7 @@ def _parse_plain_text(text: str) -> list[dict]:
                     current["synonyms"] += ", " + line
                 continue
 
-        # Example sentence
-        if re.match(r"^[A-Z].*[.?!]$", line) and len(line) > 20:
-            if not current["example_sentence"]:
-                current["example_sentence"] = line
-            continue
-
-        # Short English text = synonyms
+        # Short English = synonyms
         if re.match(r"^[A-Za-z]", line) and len(line) < 40:
             if not current["synonyms"]:
                 current["synonyms"] = line
@@ -544,7 +394,6 @@ def _parse_plain_text(text: str) -> list[dict]:
     if current and current.get("word"):
         words.append(current)
 
-    # Clean up
     for w in words:
         w["word"] = re.sub(r"\s+", " ", w["word"]).strip()
         w["meaning"] = re.sub(r"\s+", " ", w["meaning"]).strip()
@@ -555,41 +404,33 @@ def _parse_plain_text(text: str) -> list[dict]:
 
 
 def _quality_filter(words: list[dict]) -> list[dict]:
-    """Filter out garbage OCR results and clean up fields."""
+    """Filter garbage OCR and clean fields."""
     result = []
     for w in words:
         if not w.get("word"):
             continue
 
-        # Clean word: strip leading numbers like "28 Utilize" → "Utilize"
         word = re.sub(r"^\d{1,3}\s*[.):\s]*", "", w["word"]).strip()
-        # Remove POS from word if embedded: "Utilize (V)" → "Utilize"
-        pos_in_word = re.search(r"\s*\(([^)]+)\)\s*$", word)
-        if pos_in_word:
-            pos_text = pos_in_word.group(1)
-            if re.match(r"^(n|v|adj|adv|prep|conj|phrase|phr)", pos_text, re.IGNORECASE):
+        # Remove embedded POS
+        pos_m = re.search(r"\s*\(([^)]+)\)\s*$", word)
+        if pos_m:
+            pt = pos_m.group(1)
+            if re.match(r"^(n|v|adj|adv|prep|conj|phrase|phr)", pt, re.IGNORECASE):
                 if not w["part_of_speech"]:
-                    w["part_of_speech"] = pos_text
-                word = word[:pos_in_word.start()].strip()
+                    w["part_of_speech"] = pt
+                word = word[:pos_m.start()].strip()
         w["word"] = re.sub(r"\s+", " ", word).strip()
-
-        # Clean meaning
         w["meaning"] = re.sub(r"\s+", " ", w.get("meaning", "")).strip()
         w["synonyms"] = re.sub(r"\s+", " ", w.get("synonyms", "")).strip().strip(", ")
         w["example_sentence"] = re.sub(r"\s+", " ", w.get("example_sentence", "")).strip()
 
-        # Skip title/noise
         if re.search(r"(TOEFL|vocabulary|page)", w["word"], re.IGNORECASE):
             continue
-
-        # Word should have at least 2 English chars
         eng_chars = len(re.findall(r"[A-Za-z]", w["word"]))
         if eng_chars < 2:
             continue
-        # Word should be mostly English (at least 40%)
         if eng_chars < len(w["word"]) * 0.4:
             continue
-        # If we have meaning, it should have Korean
         if w.get("meaning") and not re.search(r"[가-힣]{2,}", w["meaning"]):
             w["meaning"] = ""
         result.append(w)

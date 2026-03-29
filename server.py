@@ -147,6 +147,36 @@ async def api_dictionary(word: str):
     return {"ok": False, "word": word, "meaning_ko": ""}
 
 
+@app.post("/api/dictionary/batch")
+async def api_dictionary_batch(request: Request):
+    """Translate multiple words in parallel."""
+    import asyncio
+    body = await request.json()
+    words_list = body.get("words", [])
+    if not words_list:
+        return {"ok": True, "results": []}
+
+    async def translate_one(w):
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    "https://translate.googleapis.com/translate_a/single",
+                    params={"client": "gtx", "sl": "en", "tl": "ko", "dt": "t", "q": w},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    ko = data[0][0][0] if data and data[0] and data[0][0] else ""
+                    if ko and ko != w:
+                        return {"word": w, "meaning_ko": ko}
+        except Exception:
+            pass
+        return {"word": w, "meaning_ko": ""}
+
+    # Translate up to 10 at a time
+    results = await asyncio.gather(*[translate_one(w) for w in words_list[:30]])
+    return {"ok": True, "results": list(results)}
+
+
 # --- Questions endpoints ---
 
 @app.get("/api/questions")

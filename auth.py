@@ -1,6 +1,6 @@
 import uuid
 import bcrypt
-from db import get_conn, seed_sample_questions
+from db import get_conn, seed_sample_questions, cache_session, get_cached_session, invalidate_session
 
 
 def hash_password(password: str) -> str:
@@ -19,6 +19,7 @@ def _save_session(token: str, user_id: int):
     )
     conn.commit()
     conn.close()
+    cache_session(token, user_id)
 
 
 def register(username: str, password: str) -> dict:
@@ -69,12 +70,19 @@ def login(username: str, password: str) -> dict:
 def get_user_id(token: str) -> int | None:
     if not token:
         return None
+    # Check in-memory cache first (avoids DB lookup)
+    cached = get_cached_session(token)
+    if cached is not None:
+        return cached
     conn = get_conn()
     row = conn.execute(
         "SELECT user_id FROM auth_sessions WHERE token=?", (token,)
     ).fetchone()
     conn.close()
-    return row["user_id"] if row else None
+    if row:
+        cache_session(token, row["user_id"])
+        return row["user_id"]
+    return None
 
 
 def recover_password(username: str) -> dict:
@@ -108,6 +116,7 @@ def get_user_profile(user_id: int) -> dict | None:
 
 
 def logout(token: str):
+    invalidate_session(token)
     conn = get_conn()
     conn.execute("DELETE FROM auth_sessions WHERE token=?", (token,))
     conn.commit()

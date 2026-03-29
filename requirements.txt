@@ -8,8 +8,6 @@ httpx
 edge-tts
 pytesseract
 Pillow
-numpy
-easyocr
 libsql-experimental
 python-docx
 pandas
