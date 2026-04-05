@@ -9,6 +9,7 @@ import {
     posClass,
     escapeHtml,
     showToast,
+    clearSwipeHintSeen,
 } from "../lib/vocab-utils.js";
 
 export default async function VocabPage(app) {
@@ -166,6 +167,7 @@ export default async function VocabPage(app) {
             if (!confirm("모든 학습 진행 상황을 초기화할까요? 아는단어/모르는단어 기록이 모두 삭제됩니다. 이 작업은 되돌릴 수 없습니다.")) return;
             clearProgress();
             clearLastIndex();
+            clearSwipeHintSeen();
             progress = {};
             showToast("초기화되었습니다");
             render();

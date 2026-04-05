@@ -6,6 +6,7 @@ import {
     buildQueue, posClass, escapeHtml, showToast,
     loadSoundEnabled, saveSoundEnabled, playSound,
     isStorageOk,
+    hasSeenSwipeHint, markSwipeHintSeen, clearSwipeHintSeen,
 } from "../lib/vocab-utils.js";
 
 export default async function VocabStudyPage(app, opts = {}) {
@@ -17,6 +18,8 @@ export default async function VocabStudyPage(app, opts = {}) {
     let sessionStats = { known: 0, unknown: 0 };
     const mode = opts.mode || null;
     const startIdx = Number.isFinite(opts.start) ? opts.start : null;
+
+    const isMobile = () => window.matchMedia("(max-width: 767px)").matches;
 
     // Load words (cache first)
     try {
@@ -92,27 +95,15 @@ export default async function VocabStudyPage(app, opts = {}) {
         return "";
     }
 
-    function renderShell(bodyHtml, hintHtml = "") {
-        const w = currentWord();
+    function renderShell(bodyHtml, bottomBarHtml = "") {
         const c = liveCounts();
-        const total = allWords.length;
-        const pct = total ? ((queueIndex + 1) / queue.length) * 100 : 0;
-        const soundOn = loadSoundEnabled();
+        const pct = queue.length ? ((queueIndex + 1) / queue.length) * 100 : 0;
 
         app.innerHTML = `
-            ${renderHeader("Vocabulary 암기")}
-            <div class="vs-toolbar">
-                <button class="btn btn-sm btn-secondary" id="vs-back">← 목록</button>
-                <div class="vs-header-right">
-                    <button class="vs-icon-btn" id="vs-sound" title="사운드 토글">${soundOn ? "🔊" : "🔇"}</button>
-                    <div class="vs-jump-wrap">
-                        <button class="btn btn-sm btn-secondary" id="vs-jump-btn">단어 점프 ▾</button>
-                        <div class="vs-jump-panel hidden" id="vs-jump-panel">
-                            <input type="text" class="form-input vs-jump-search" id="vs-jump-search" placeholder="🔍 단어 검색..." />
-                            <div class="vs-jump-list" id="vs-jump-list"></div>
-                        </div>
-                    </div>
-                </div>
+            <div class="vs-toolbar vs-header-mobile">
+                <button class="vs-icon-btn vs-back-btn" id="vs-back" aria-label="목록으로" aria-keyshortcuts="Escape">←</button>
+                <div class="vs-header-title">Vocabulary</div>
+                <button class="btn btn-sm btn-secondary vs-jump-trigger" id="vs-jump-btn" aria-label="단어 점프" aria-keyshortcuts="J">점프</button>
             </div>
             ${!isStorageOk() ? `<div class="vocab-warn-banner">⚠️ 브라우저 저장소 접근 불가 — 진행 상황이 저장되지 않습니다</div>` : ""}
             <div class="vs-progress-wrap">
@@ -126,13 +117,24 @@ export default async function VocabStudyPage(app, opts = {}) {
                     <span style="color:var(--text-dim)">○ ${c.unseen}</span>
                 </div>
             </div>
-            <div class="vocab-flash-card-wrapper" id="vs-card-wrap">
+            <div class="vocab-flash-card-wrapper vs-stage-enter" id="vs-card-wrap">
                 ${bodyHtml}
             </div>
-            <div class="vs-nav">
-                <button class="btn btn-secondary btn-sm" id="vs-prev" ${queueIndex === 0 ? "disabled" : ""}>← 이전</button>
-                <div class="vs-kb-hint">${hintHtml}</div>
-                <button class="btn btn-secondary btn-sm" id="vs-next">다음 →</button>
+            ${bottomBarHtml}
+            <div class="vs-sheet-backdrop" id="vs-sheet-backdrop" aria-hidden="true"></div>
+            <div class="vs-sheet" id="vs-sheet" role="dialog" aria-modal="true" aria-label="단어 점프" aria-hidden="true">
+                <div class="vs-sheet-handle"></div>
+                <div class="vs-sheet-title">단어 점프</div>
+                <input type="text" class="form-input vs-jump-search" id="vs-jump-search" placeholder="🔍 단어 검색..." />
+                <div class="vs-jump-list" id="vs-jump-list"></div>
+                <div class="vs-sheet-divider"></div>
+                <div class="vs-sheet-settings">
+                    <label class="vs-sound-toggle">
+                        <span>🔊 발음 자동 재생</span>
+                        <input type="checkbox" id="vs-sound-toggle" ${loadSoundEnabled() ? "checked" : ""} />
+                        <span class="vs-switch"></span>
+                    </label>
+                </div>
             </div>
         `;
         bindLogout();
@@ -153,20 +155,25 @@ export default async function VocabStudyPage(app, opts = {}) {
         const w = currentWord();
         const pCls = posClass(w.pos);
         const wCls = wordFontClass(w.word);
-        const isTouch = "ontouchstart" in window;
-        const hint = isTouch ? "탭하거나 위로 스와이프" : "Space / 클릭으로 뒤집기";
         const body = `
-            <div class="vocab-flash-card stage-a" id="vs-card" tabindex="0">
+            <div class="vocab-flash-card stage-a" id="vs-card" tabindex="0" role="button" aria-label="탭하여 뜻 보기">
                 ${w.pos ? `<div class="pos-badge ${pCls}">${escapeHtml(w.pos)}</div>` : ""}
                 <div class="vocab-word ${wCls}">${escapeHtml(w.word)}</div>
-                <div class="vocab-stage-hint">${hint}</div>
+                <div class="vocab-stage-hint">탭하여 뜻 보기</div>
                 <div class="vocab-blur-preview">${escapeHtml(w.meaning)}</div>
             </div>
         `;
-        renderShell(body, "Space: 뒤집기 · ← 이전 · Esc: 목록 · J: 점프");
+        const bottomBar = `
+            <div class="vs-bottom-bar vs-bottom-bar-a">
+                <button class="vs-bar-side" id="vs-prev" ${queueIndex === 0 ? "disabled" : ""} aria-label="이전 단어" aria-keyshortcuts="ArrowLeft">← 이전</button>
+                <div class="vs-bar-center">탭하여 뜻 보기</div>
+                <button class="vs-bar-side" id="vs-next" aria-label="다음 단어">다음 →</button>
+            </div>
+        `;
+        renderShell(body, bottomBar);
         const card = document.getElementById("vs-card");
         card.addEventListener("click", () => flipToB());
-        bindSwipe(card, { onUp: flipToB, onLeft: prevCard });
+        bindSwipe(card, { onLeft: prevCard });
         card.focus();
     }
 
@@ -174,39 +181,56 @@ export default async function VocabStudyPage(app, opts = {}) {
         const w = currentWord();
         const pCls = posClass(w.pos);
         const wCls = wordFontClass(w.word);
+        const showHint = !hasSeenSwipeHint();
         const body = `
             <div class="vocab-flash-card stage-b" id="vs-card" tabindex="0">
                 ${w.pos ? `<div class="pos-badge ${pCls}">${escapeHtml(w.pos)}</div>` : ""}
                 <div class="vocab-word ${wCls}">${escapeHtml(w.word)}</div>
                 <div class="vocab-divider"></div>
                 <div class="vocab-meaning-big">${escapeHtml(w.meaning)}</div>
-                <div class="vocab-rate-buttons">
-                    <button class="btn btn-danger vs-rate-btn" id="vs-rate-unknown">
-                        ✕ 모르는단어<span class="kbd-hint">[2]</span>
-                    </button>
-                    <button class="btn btn-success vs-rate-btn" id="vs-rate-known">
-                        ✓ 아는단어<span class="kbd-hint">[1]</span>
-                    </button>
-                </div>
-                <div class="vs-swipe-overlay-left">✕</div>
-                <div class="vs-swipe-overlay-right">✓</div>
+                <div class="vs-swipe-overlay-left" aria-hidden="true">✕</div>
+                <div class="vs-swipe-overlay-right" aria-hidden="true">✓</div>
+                ${showHint ? `
+                    <div class="vs-swipe-hint" id="vs-swipe-hint" aria-hidden="true">
+                        <span class="vs-swipe-hint-left">← 모름</span>
+                        <span class="vs-swipe-hint-right">아는 →</span>
+                    </div>
+                ` : ""}
             </div>
         `;
-        renderShell(body, "1: 아는 · 2: 모름 · ←/→: 평가 · Esc: 목록");
+        const bottomBar = `
+            <div class="vs-bottom-bar vs-bottom-bar-b">
+                <div class="vs-rate-row">
+                    <button class="btn btn-danger vs-rate-btn" id="vs-rate-unknown" aria-label="모름" aria-keyshortcuts="2">
+                        <span class="vs-rate-icon">✕</span>
+                        <span class="vs-rate-label">모름</span>
+                    </button>
+                    <button class="btn btn-success vs-rate-btn" id="vs-rate-known" aria-label="아는" aria-keyshortcuts="1">
+                        <span class="vs-rate-icon">✓</span>
+                        <span class="vs-rate-label">아는</span>
+                    </button>
+                </div>
+                <div class="vs-swipe-subhint">← 모름 ·  아는 →</div>
+            </div>
+        `;
+        renderShell(body, bottomBar);
         const card = document.getElementById("vs-card");
+
         document.getElementById("vs-rate-known").addEventListener("click", (e) => {
             e.stopPropagation();
             pulseBtn(e.currentTarget, "success");
+            dismissSwipeHint();
             rateAndAdvance("known");
         });
         document.getElementById("vs-rate-unknown").addEventListener("click", (e) => {
             e.stopPropagation();
             pulseBtn(e.currentTarget, "danger");
+            dismissSwipeHint();
             rateAndAdvance("unknown");
         });
         bindSwipe(card, {
-            onRight: () => rateAndAdvance("known"),
-            onLeft: () => rateAndAdvance("unknown"),
+            onRight: () => { dismissSwipeHint(); rateAndAdvance("known"); },
+            onLeft:  () => { dismissSwipeHint(); rateAndAdvance("unknown"); },
             drag: true,
         });
     }
@@ -234,18 +258,22 @@ export default async function VocabStudyPage(app, opts = {}) {
                         `).join("")}
                     </div>
                 ` : `<div class="vocab-c-no-syn">(등록된 유의어가 없습니다)</div>`}
-                <button class="btn btn-primary btn-block vs-next-btn" id="vs-next-word">
-                    ${isLast ? "🎉 학습 완료 보기" : "▶ 다음 단어"}
+            </div>
+        `;
+        const bottomBar = `
+            <div class="vs-bottom-bar vs-bottom-bar-c">
+                <button class="btn btn-primary btn-block vs-cta-next" id="vs-next-word" aria-label="${isLast ? '학습 완료 보기' : '다음 단어'}">
+                    ${isLast ? "🎉 학습 완료 보기" : "다음 단어 →"}
                 </button>
             </div>
         `;
-        renderShell(body, "Space/Enter/→: 다음 · ← 이전 · Esc: 목록");
+        renderShell(body, bottomBar);
         const card = document.getElementById("vs-card");
         document.getElementById("vs-next-word").addEventListener("click", (e) => {
             e.stopPropagation();
             nextCard();
         });
-        bindSwipe(card, { onRight: nextCard, onLeft: prevCard });
+        bindSwipe(card, { onRight: prevCard, onLeft: nextCard });
     }
 
     // -------- Actions --------
@@ -287,38 +315,59 @@ export default async function VocabStudyPage(app, opts = {}) {
         setTimeout(() => el.classList.remove("pulsing-success", "pulsing-danger"), 420);
     }
 
+    function dismissSwipeHint() {
+        const hint = document.getElementById("vs-swipe-hint");
+        if (!hint) return;
+        hint.classList.add("fading");
+        setTimeout(() => hint.remove(), 320);
+        markSwipeHintSeen();
+    }
+
     // -------- Shell events --------
 
     function bindShellEvents() {
         document.getElementById("vs-back").addEventListener("click", () => {
             location.hash = "#/vocab";
         });
-        document.getElementById("vs-prev").addEventListener("click", prevCard);
-        document.getElementById("vs-next").addEventListener("click", () => {
+        const prevBtn = document.getElementById("vs-prev");
+        const nextBtn = document.getElementById("vs-next");
+        if (prevBtn) prevBtn.addEventListener("click", prevCard);
+        if (nextBtn) nextBtn.addEventListener("click", () => {
             // skip without rating
             if (stage === "C") { nextCard(); return; }
             if (queueIndex < queue.length - 1) { queueIndex++; stage = "A"; renderCard(); }
             else renderComplete();
         });
-        document.getElementById("vs-sound").addEventListener("click", () => {
-            saveSoundEnabled(!loadSoundEnabled());
-            renderCard();
-        });
 
-        // Jump dropdown
+        // Sound toggle (inside sheet)
+        const soundToggle = document.getElementById("vs-sound-toggle");
+        if (soundToggle) {
+            soundToggle.addEventListener("change", (e) => {
+                saveSoundEnabled(!!e.target.checked);
+            });
+        }
+
+        // Jump sheet
         const jumpBtn = document.getElementById("vs-jump-btn");
-        const panel = document.getElementById("vs-jump-panel");
+        const sheet = document.getElementById("vs-sheet");
+        const backdrop = document.getElementById("vs-sheet-backdrop");
         const searchInput = document.getElementById("vs-jump-search");
         const listEl = document.getElementById("vs-jump-list");
 
         function openJump() {
-            panel.classList.remove("hidden");
+            sheet.classList.add("open");
+            backdrop.classList.add("open");
+            sheet.setAttribute("aria-hidden", "false");
             renderJumpList("");
-            setTimeout(() => searchInput.focus(), 20);
+            setTimeout(() => searchInput?.focus(), 20);
         }
         function closeJump() {
-            panel.classList.add("hidden");
+            sheet.classList.remove("open");
+            backdrop.classList.remove("open");
+            sheet.setAttribute("aria-hidden", "true");
         }
+        function isJumpOpen() { return sheet.classList.contains("open"); }
+
         function renderJumpList(filter) {
             const f = (filter || "").toLowerCase();
             const items = allWords
@@ -345,19 +394,36 @@ export default async function VocabStudyPage(app, opts = {}) {
         }
         jumpBtn.addEventListener("click", (e) => {
             e.stopPropagation();
-            if (panel.classList.contains("hidden")) openJump();
-            else closeJump();
+            if (isJumpOpen()) closeJump();
+            else openJump();
         });
-        searchInput?.addEventListener("input", () => renderJumpList(searchInput.value));
-        document.onclick = (e) => {
-            if (!panel.classList.contains("hidden") && !panel.contains(e.target) && e.target !== jumpBtn && !jumpBtn.contains(e.target)) {
-                closeJump();
-            }
-        };
+        backdrop.addEventListener("click", closeJump);
 
-        // Global keys
+        // Sheet drag-to-close
+        let sheetStartY = 0, sheetDy = 0, sheetDragging = false;
+        sheet.addEventListener("touchstart", (e) => {
+            if (sheet.scrollTop > 0) return;
+            sheetStartY = e.touches[0].clientY;
+            sheetDy = 0;
+            sheetDragging = true;
+        }, { passive: true });
+        sheet.addEventListener("touchmove", (e) => {
+            if (!sheetDragging) return;
+            sheetDy = e.touches[0].clientY - sheetStartY;
+            if (sheetDy > 0) sheet.style.transform = `translateY(${sheetDy}px)`;
+        }, { passive: true });
+        sheet.addEventListener("touchend", () => {
+            if (!sheetDragging) return;
+            sheetDragging = false;
+            sheet.style.transform = "";
+            if (sheetDy > 80) closeJump();
+        });
+
+        searchInput?.addEventListener("input", () => renderJumpList(searchInput.value));
+
+        // Global keys (desktop shortcuts remain, no visible hint text)
         document.onkeydown = (e) => {
-            if (!panel.classList.contains("hidden")) {
+            if (isJumpOpen()) {
                 if (e.key === "Escape") { closeJump(); e.preventDefault(); }
                 return;
             }
@@ -368,8 +434,8 @@ export default async function VocabStudyPage(app, opts = {}) {
                 if (e.key === " " || e.key === "Enter" || e.key === "ArrowUp") { e.preventDefault(); flipToB(); }
                 else if (e.key === "ArrowLeft") { e.preventDefault(); prevCard(); }
             } else if (stage === "B") {
-                if (e.key === "1" || e.key === "ArrowRight") { e.preventDefault(); rateAndAdvance("known"); }
-                else if (e.key === "2" || e.key === "ArrowLeft") { e.preventDefault(); rateAndAdvance("unknown"); }
+                if (e.key === "1" || e.key === "ArrowRight") { e.preventDefault(); dismissSwipeHint(); rateAndAdvance("known"); }
+                else if (e.key === "2" || e.key === "ArrowLeft") { e.preventDefault(); dismissSwipeHint(); rateAndAdvance("unknown"); }
                 // Space/Enter disabled in Stage B (force evaluation)
             } else if (stage === "C") {
                 if (e.key === " " || e.key === "Enter" || e.key === "ArrowRight" || e.key === "ArrowDown") {
@@ -393,33 +459,42 @@ export default async function VocabStudyPage(app, opts = {}) {
 
     // -------- Swipe --------
 
-    function bindSwipe(el, { onLeft, onRight, onUp, drag } = {}) {
+    function bindSwipe(el, { onLeft, onRight, drag } = {}) {
         let startX = 0, startY = 0, startT = 0;
         let dragging = false;
-        let lastDx = 0;
+        let cancelled = false;
+        let horizontalLocked = false;
 
         el.addEventListener("touchstart", (e) => {
             const t = e.touches[0];
             startX = t.clientX; startY = t.clientY; startT = Date.now();
-            dragging = true; lastDx = 0;
+            dragging = true; cancelled = false; horizontalLocked = false;
         }, { passive: true });
 
         el.addEventListener("touchmove", (e) => {
-            if (!dragging) return;
+            if (!dragging || cancelled) return;
             const t = e.touches[0];
             const dx = t.clientX - startX;
             const dy = t.clientY - startY;
-            lastDx = dx;
-            if (drag && Math.abs(dx) > Math.abs(dy)) {
-                el.style.transform = `translateX(${dx}px) rotate(${dx * 0.05}deg)`;
+            const absX = Math.abs(dx), absY = Math.abs(dy);
+
+            // vertical cancel guard: |dy| > |dx| * 1.2 → treat as scroll
+            if (!horizontalLocked && absY > absX * 1.2 && absY > 10) {
+                cancelled = true;
+                return;
+            }
+            if (absX > 10 && absX > absY) horizontalLocked = true;
+
+            if (drag && horizontalLocked) {
+                el.style.transform = `translateX(${dx}px) rotate(${dx * 0.04}deg)`;
                 const leftOv = el.querySelector(".vs-swipe-overlay-left");
                 const rightOv = el.querySelector(".vs-swipe-overlay-right");
                 if (dx > 0) {
-                    if (rightOv) rightOv.style.opacity = Math.min(Math.abs(dx) / 80, 1);
+                    if (rightOv) rightOv.style.opacity = Math.min(Math.abs(dx) / 70, 1);
                     if (leftOv) leftOv.style.opacity = 0;
                     el.style.background = `linear-gradient(135deg, var(--bg-card), rgba(102,187,106,${Math.min(Math.abs(dx)/400, 0.2)}))`;
                 } else {
-                    if (leftOv) leftOv.style.opacity = Math.min(Math.abs(dx) / 80, 1);
+                    if (leftOv) leftOv.style.opacity = Math.min(Math.abs(dx) / 70, 1);
                     if (rightOv) rightOv.style.opacity = 0;
                     el.style.background = `linear-gradient(135deg, rgba(239,83,80,${Math.min(Math.abs(dx)/400, 0.2)}), var(--bg-card))`;
                 }
@@ -429,35 +504,54 @@ export default async function VocabStudyPage(app, opts = {}) {
         el.addEventListener("touchend", (e) => {
             if (!dragging) return;
             dragging = false;
+            if (cancelled) {
+                if (drag) resetCard(el);
+                return;
+            }
             const dt = Date.now() - startT;
             const t = e.changedTouches[0];
             const dx = t.clientX - startX;
             const dy = t.clientY - startY;
-            const velocity = Math.abs(dx) / Math.max(dt, 1);
             const absX = Math.abs(dx), absY = Math.abs(dy);
+            const velocity = absX / Math.max(dt, 1);
 
-            // reset
-            if (drag) {
-                el.style.transition = "transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.25s";
-                el.style.transform = "";
-                el.style.background = "";
-                const lo = el.querySelector(".vs-swipe-overlay-left");
-                const ro = el.querySelector(".vs-swipe-overlay-right");
-                if (lo) lo.style.opacity = 0;
-                if (ro) ro.style.opacity = 0;
-                setTimeout(() => { el.style.transition = ""; }, 260);
-            }
-
-            const triggered = absX > 50 || velocity > 0.3;
-            if (absY > absX) {
-                // vertical
-                if (dy < -50 && onUp) onUp();
+            // Vertical cancel
+            if (absY > absX * 1.2) {
+                if (drag) resetCard(el);
                 return;
             }
-            if (!triggered) return;
+
+            const triggered = absX > 60 || velocity > 0.35;
+            if (!triggered) {
+                if (drag) resetCard(el);
+                return;
+            }
+
+            if (drag) {
+                // Fly off animation
+                const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+                if (!reduceMotion) {
+                    const dir = dx > 0 ? 1 : -1;
+                    el.style.transition = "transform 0.3s ease-out, opacity 0.3s ease-out";
+                    el.style.transform = `translateX(${dir * window.innerWidth * 1.2}px) rotate(${dir * 20}deg)`;
+                    el.style.opacity = "0";
+                }
+            }
+
             if (dx > 0 && onRight) onRight();
             else if (dx < 0 && onLeft) onLeft();
         });
+    }
+
+    function resetCard(el) {
+        el.style.transition = "transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.25s";
+        el.style.transform = "";
+        el.style.background = "";
+        const lo = el.querySelector(".vs-swipe-overlay-left");
+        const ro = el.querySelector(".vs-swipe-overlay-right");
+        if (lo) lo.style.opacity = 0;
+        if (ro) ro.style.opacity = 0;
+        setTimeout(() => { el.style.transition = ""; }, 300);
     }
 
     // -------- Completion screens --------
@@ -501,7 +595,6 @@ export default async function VocabStudyPage(app, opts = {}) {
         });
         document.getElementById("vc-restart").addEventListener("click", () => {
             location.hash = "#/vocab/study";
-            // Force reload if already on same hash
             setTimeout(() => VocabStudyPage(app, {}), 0);
         });
         document.getElementById("vc-back").addEventListener("click", () => {
@@ -523,7 +616,6 @@ export default async function VocabStudyPage(app, opts = {}) {
         `;
         bindLogout();
         document.getElementById("vm-review").addEventListener("click", () => {
-            // Force a review queue: all words, tier3 only
             queue = buildQueue(allWords, progress, null);
             queueIndex = 0;
             stage = "A";
@@ -533,6 +625,7 @@ export default async function VocabStudyPage(app, opts = {}) {
             if (!confirm("모든 학습 진행 상황을 초기화할까요? 이 작업은 되돌릴 수 없습니다.")) return;
             clearProgress();
             clearLastIndex();
+            clearSwipeHintSeen();
             progress = {};
             showToast("초기화되었습니다");
             VocabStudyPage(app, {});
@@ -543,7 +636,6 @@ export default async function VocabStudyPage(app, opts = {}) {
     }
 
     function renderError() {
-        const hasCache = !!sessionStorage.getItem("toeflmate_vocab_cache");
         app.innerHTML = `
             ${renderHeader("Vocabulary")}
             <div class="vocab-error-state">

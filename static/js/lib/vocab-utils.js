@@ -3,6 +3,7 @@
 const PROGRESS_KEY = "vocab_progress_v1";
 const LAST_INDEX_KEY = "vocab_last_index";
 const SOUND_KEY = "vocab_sound_enabled";
+const SWIPE_HINT_KEY = "toeflmate_vocab_swipe_hint_seen";
 
 // Memory fallback when localStorage fails (private mode, etc.)
 const memStore = { progress: null, lastIndex: null, sound: null };
@@ -82,6 +83,12 @@ export function loadSoundEnabled() {
     return raw === "1" || raw === "true";
 }
 export function saveSoundEnabled(on) { safeSet(SOUND_KEY, on ? "1" : "0"); }
+
+export function hasSeenSwipeHint() {
+    return safeGet(SWIPE_HINT_KEY) === "1";
+}
+export function markSwipeHintSeen() { safeSet(SWIPE_HINT_KEY, "1"); }
+export function clearSwipeHintSeen() { safeRemove(SWIPE_HINT_KEY); }
 
 export function posClass(pos) {
     if (!pos) return "pos-compound";

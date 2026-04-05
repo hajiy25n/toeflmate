@@ -1076,3 +1076,328 @@ Stage A 카드 hover 시 영어 단어 주변에 미묘한 accent 글로우:
 ---
 
 *이 스펙에 관해 궁금한 점은 하지연에게 확인. 구현 중 발견한 UX 이슈는 스펙에 역으로 피드백 부탁.*
+
+---
+
+## [MOBILE REVISION 2026-04-06]
+
+> **목적:** 기존 스펙은 데스크톱 키보드 우선(Space/J/Esc/화살표)으로 작성되었으나, 실제 사용은 **iPhone PWA(375–430px)** 위주로 확인됨. 이 섹션은 위쪽 섹션 3·5·7의 관련 부분을 **모바일 퍼스트**로 덮어쓰는 최종 권위(override) 문서다. 충돌 시 이 섹션이 우선한다.
+>
+> **범위:** `static/js/pages/vocab-study.js`, `static/js/pages/vocab.js`, `static/js/lib/vocab-utils.js`, `static/css/app.css`의 Vocab Flashcard 섹션. 데스크톱 키보드 단축키는 **JS 로직에서는 유지**하되, **UI 텍스트에서는 완전히 제거**한다.
+
+### M.1 디자인 원칙 (모바일 퍼스트)
+
+1. **Primary viewport**: 375–430px (iPhone SE ~ 15 Pro Max). Desktop ≥768px는 fluid max-width로 대응.
+2. **Thumb zone**: 평가/주요 액션은 **화면 하단 2/3 영역**에 위치. 상단은 정보 전용.
+3. **No hover**: `:hover` 상태는 데스크톱(`@media (hover: hover) and (pointer: fine)`)으로만 격리. 모바일에서는 `:active`만 사용.
+4. **No keyboard text**: "Space", "Enter", "J", "Esc", "←/→", "1/2", "[1]/[2]" 등 모든 키보드 지칭 문자열을 **렌더링 DOM에서 제거**. 단축키 동작은 유지.
+5. **Tap target ≥48×48px**: 모든 상호작용 요소는 iOS HIG 44pt / Material 48dp 이상.
+6. **Safe area**: `env(safe-area-inset-top/bottom/left/right)`을 헤더/바텀바/바텀시트에 반드시 적용.
+7. **Haptic via CSS**: 진동 API 대신 짧은 CSS 트랜스폼(scale/translate)으로 "탭이 먹혔다"는 감각 제공.
+
+### M.2 인터랙션 모델 — 터치 1차, 키보드 2차
+
+**전면 재설계된 Stage 전환 표** (섹션 3.6, 3.7을 대체):
+
+| Stage | 주 제스처 (터치) | 보조 제스처 (터치) | 데스크톱 키보드 (숨김) |
+|---|---|---|---|
+| **A** (단어만) | 카드 **어디든 탭** → Stage B | ↑ 스와이프 → B | `Space`/`Enter`/`↑` → B, `←` → 이전 |
+| **B** (뜻+평가) | **하단 버튼 탭**: ✕ 모름 / ✓ 아는 | **좌 스와이프**=모름, **우 스와이프**=아는 | `1`/`→`=아는, `2`/`←`=모름 |
+| **C** (유의어) | **하단 "다음 단어" 버튼 탭** | 좌 스와이프 → 다음, 우 스와이프 → 이전 | `Space`/`Enter`/`→`/`↓` = 다음 |
+| 전 Stage 공통 | 헤더 **← 뒤로** 탭 → 목록 | 헤더 **점프** 탭 → 바텀시트 | `Esc` = 목록, `J` = 점프 |
+
+- `Space`/`Enter`/`J`/`Esc` 등은 **JS 이벤트 리스너로만 존재**하고, 어떤 DOM 텍스트에도 노출되지 않는다.
+- 모바일(`'ontouchstart' in window || matchMedia('(pointer: coarse)').matches`) 감지 시 키보드 이벤트 리스너는 그대로 두되, **힌트 문자열은 터치용으로 강제**한다.
+
+### M.3 UI 텍스트 교체표 (Before → After)
+
+**모든 변경은 렌더링되는 문자열 기준. JS 파일 내 리터럴을 교체한다.**
+
+| 위치 | Before (현재) | After (모바일) | 비고 |
+|---|---|---|---|
+| `renderStageA()` 힌트 | `"Space / 클릭으로 뒤집기"` (데스크톱) / `"탭하거나 위로 스와이프"` (모바일) | `"탭하여 뜻 보기"` (모바일/데스크톱 공통) | 조건 분기 제거, 문자열 단일화 |
+| `renderStageA()` 하단 `vs-kb-hint` | `"Space: 뒤집기 · ← 이전 · Esc: 목록 · J: 점프"` | **빈 문자열 `""`** (완전 제거, 컨테이너도 `display:none` 또는 미렌더) | 힌트 영역 자체 삭제 |
+| `renderStageB()` 버튼 | `✕ 모르는단어<span class="kbd-hint">[2]</span>` / `✓ 아는단어<span class="kbd-hint">[1]</span>` | `✕ 모름` / `✓ 아는` (kbd-hint span 완전 제거) | 레이블 짧게, `.kbd-hint` 클래스 DOM에서 제거 |
+| `renderStageB()` 하단 힌트 | `"1: 아는 · 2: 모름 · ←/→: 평가 · Esc: 목록"` | `"← 모름 ·  아는 →"` (스와이프 가이드, 0.7rem, 첫 카드 이후 자동 fade 옵션) | 섹션 M.7 first-time hint 참조 |
+| `renderStageC()` 하단 힌트 | `"Space/Enter/→: 다음 · ← 이전 · Esc: 목록"` | **빈 문자열** (제거) | 하단 "다음 단어" 버튼이 CTA |
+| `renderStageC()` 다음 버튼 | `▶ 다음 단어` (`.btn .btn-primary`) | `다음 단어 →` (`.btn .btn-primary .btn-block .vs-cta-next`) | 풀폭, 56px 높이, 섹션 M.4 참조 |
+| 헤더 점프 버튼 | `"단어 점프 ▾"` | `"점프"` (아이콘 생략 or `⋮`/`☰` 작게) | 바텀시트 트리거 |
+| 헤더 사운드 버튼 `#vs-sound` | 헤더 상단에 `🔊/🔇` 아이콘 버튼 | **헤더에서 제거**. 점프 바텀시트 하단 "설정" 영역 또는 오버플로우 메뉴로 이동 | 섹션 M.8 참조 |
+| 완료 화면 안내 | (기존) | 변경 없음 (이모지+한국어이므로 문제없음) | — |
+
+> **dev agent 액션**: 위 표의 **After** 컬럼이 곧 최종 문자열. 조건부 `isTouch ? A : B` 형태의 분기는 전부 제거하고 단일 문자열로 통일한다.
+
+### M.4 바텀 내비 바 사양 (신규)
+
+Stage A/B/C 모두에서 카드 아래 **fixed-like** (스크롤에는 따라옴, 하지만 시각적으로 하단 고정처럼 보이도록 카드와 바텀바가 같은 스크롤 컨테이너 내부에 놓임) 바텀 컨트롤 바를 둔다.
+
+```
+Stage A:
+┌─────────────────────────────────┐
+│  ← 이전   [ 탭하여 뜻 보기 ]   점프  │   ← 보조 (아이콘 + 작은 레이블)
+└─────────────────────────────────┘
+         (메인 액션 = 카드 탭)
+
+Stage B (버튼이 메인):
+┌─────────────────────────────────┐
+│  ┌─────────┐   ┌─────────┐     │
+│  │ ✕  모름 │   │ ✓  아는 │     │
+│  └─────────┘   └─────────┘     │
+│       ← 모름 ·  아는 →          │  ← 스와이프 힌트 (first-card만)
+└─────────────────────────────────┘
+
+Stage C:
+┌─────────────────────────────────┐
+│  ┌───────────────────────────┐  │
+│  │     다음 단어  →          │  │
+│  └───────────────────────────┘  │
+└─────────────────────────────────┘
+```
+
+**치수 (모바일 ≤480px):**
+
+| 요소 | 값 |
+|---|---|
+| 바텀바 컨테이너 | `padding: 12px 16px calc(12px + env(safe-area-inset-bottom)) 16px;` |
+| 평가 버튼 높이 | `min-height: 56px;` |
+| 평가 버튼 폰트 | `font-size: 1.05rem; font-weight: 600;` |
+| 평가 버튼 간격 | `gap: 12px;` (좌우 두 개, 각 `flex: 1;`) |
+| "다음 단어" 버튼 | `min-height: 56px; width: 100%; font-size: 1.05rem;` |
+| Stage A 하단 보조 | 높이 `44px`, 좌(이전)/우(점프)는 아이콘+텍스트 `0.78rem`, 중앙은 안내 텍스트 `0.85rem` |
+| 탭 타겟 최소 | `48×48px` (투명 padding 포함 가능) |
+
+**데스크톱 ≥768px**: 버튼 `min-height: 48px`로 축소, `max-width: 560px` centered.
+
+### M.5 스와이프 제스처 사양 (섹션 3.7 대체)
+
+**적용 Stage**: A(이전만), B(평가), C(이동). 세로 스와이프(↑/↓)는 **제거**한다 (iOS에서 스크롤과 충돌).
+
+| 제스처 | Stage A | Stage B | Stage C |
+|---|---|---|---|
+| 카드 **탭** | → Stage B | (비활성, 평가 강제) | → 다음 단어 |
+| **좌 스와이프** | 이전 단어 | **모름** 평가 | 다음 단어 |
+| **우 스와이프** | (비활성 or 이전과 동일) | **아는** 평가 | 이전 단어 |
+
+**임계값:**
+- 거리: `|Δx| > 60px` (기존 50 → 60, 오탐 감소)
+- 속도: `|vx| > 0.35 px/ms`면 거리 미달이어도 발동
+- 세로 오차 방지: `|Δy| > |Δx| * 1.2`면 **스와이프 취소**(스크롤로 간주)
+- 터치 시작에서 100ms 내 움직임 없으면 long-press로 간주해 제스처 무시
+
+**드래그 중 시각 피드백 (Stage B):**
+- `transform: translateX(Δx) rotate(calc(Δx * 0.04deg));` (기존 0.05 → 0.04, 미세 완화)
+- 좌측 드래그: 카드 배경 `linear-gradient(135deg, rgba(239,83,80,0.18), var(--bg-card))` + 좌상단 `✕` (`opacity: min(|Δx|/70, 1)`, `font-size: 3rem`)
+- 우측 드래그: `linear-gradient(135deg, var(--bg-card), rgba(102,187,106,0.18))` + 우상단 `✓`
+- 손 뗌 + 임계 미달: `transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);` 스프링 복귀
+- 임계 초과: `transform: translateX(±120vw) rotate(±20deg); opacity: 0;` 0.3s 후 다음 카드 등장
+
+**제스처 등록:** `touchstart`/`touchmove`/`touchend` + `{passive: true}`(move는 가로로 확정되면 `passive: false`로 전환, 또는 `touch-action: pan-y;`로 세로만 브라우저에 맡김).
+
+### M.6 햅틱(CSS) 피드백
+
+진동 API는 사용하지 않는다. 대신 아래 CSS 마이크로 애니메이션:
+
+```css
+/* 카드 탭 */
+.vocab-flash-card:active { transform: scale(0.985); transition: transform 80ms ease-out; }
+
+/* 평가 버튼 탭 */
+.vs-rate-btn:active { transform: scale(0.96); }
+.vs-rate-btn.pulsing-success { animation: vs-pulse-ok 380ms ease-out; }
+.vs-rate-btn.pulsing-danger  { animation: vs-pulse-no 380ms ease-out; }
+
+@keyframes vs-pulse-ok {
+  0%   { box-shadow: 0 0 0 0 rgba(102,187,106,0.55); }
+  100% { box-shadow: 0 0 0 14px rgba(102,187,106,0); }
+}
+@keyframes vs-pulse-no {
+  0%   { box-shadow: 0 0 0 0 rgba(239,83,80,0.55); }
+  100% { box-shadow: 0 0 0 14px rgba(239,83,80,0); }
+}
+
+/* Stage 전환 */
+.vs-stage-enter { animation: vs-stage-in 280ms cubic-bezier(0.25,0.46,0.45,0.94) both; }
+@keyframes vs-stage-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vs-stage-enter, .vs-rate-btn.pulsing-success, .vs-rate-btn.pulsing-danger { animation: none; }
+  .vocab-flash-card:active { transform: none; }
+}
+```
+
+### M.7 최초 진입 제스처 힌트 (first-card hint)
+
+사용자가 학습 세션에서 **첫 카드의 Stage B에 처음 도달**했을 때만 노출되는 애니메이션 힌트.
+
+**트리거:**
+- `localStorage.toeflmate_vocab_swipe_hint_seen !== '1'`
+- Stage B 렌더 시점에 한 번만
+
+**시각 요소 (카드 내부 오버레이, pointer-events: none):**
+```
+     ←                           →
+  ✕ 모름                      아는 ✓
+        (좌우 화살표가 약하게 흔들림)
+```
+
+**CSS/애니메이션:**
+```css
+.vs-swipe-hint {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 24px;
+  font-size: 0.9rem; color: var(--text-muted);
+  pointer-events: none;
+  animation: vs-hint-in 400ms ease-out 200ms both,
+             vs-hint-sway 1.6s ease-in-out 600ms 2;
+}
+.vs-swipe-hint.fading { animation: vs-hint-out 300ms ease-out forwards; }
+
+@keyframes vs-hint-in  { from { opacity: 0; } to { opacity: 0.9; } }
+@keyframes vs-hint-out { to { opacity: 0; } }
+@keyframes vs-hint-sway {
+  0%,100% { transform: translateX(0); }
+  50%     { transform: translateX(6px); }
+}
+```
+
+**해제 조건:** 어떤 평가(탭/스와이프)든 **1회 발생 시** `.fading` 클래스 추가 → 300ms 후 DOM 제거 → `localStorage.toeflmate_vocab_swipe_hint_seen = '1'` 저장. 같은 단말에서 다시 표시되지 않음.
+
+> 리셋: 설정에서 "초기화" 시 이 키도 함께 삭제해 다시 튜토리얼 볼 수 있게 한다.
+
+### M.8 사운드 토글 이동 & 점프 바텀시트
+
+**사운드 토글:**
+- 헤더의 `#vs-sound` 버튼 **제거**.
+- 대신 점프 바텀시트 상단 또는 하단에 `설정` 섹션: `[🔊 발음 자동 재생  ●────○ ]` 토글 스위치.
+- 기존 `loadSoundEnabled()`/저장 로직은 그대로 사용, 위치만 이동.
+
+**점프 바텀시트 (iOS 스타일):**
+- 기존 `.settings-dropdown` 대신 모바일에서는 바텀시트로 전환.
+- 구조:
+  ```
+  ┌──────────────────────────────┐
+  │          ━━━━                │  ← drag handle
+  │  단어 점프                    │
+  │  ┌─────────────────────────┐ │
+  │  │ 🔍 단어 검색...          │ │
+  │  └─────────────────────────┘ │
+  │  #1  Burrow          ✓       │
+  │  #2  Anticipate      ○       │
+  │   ...  (스크롤)              │
+  │  ─────────────────────────   │
+  │  🔊 발음 자동 재생   [●──]    │  ← 설정 섹션
+  └──────────────────────────────┘
+          (+ safe-area-inset-bottom)
+  ```
+- CSS:
+  ```css
+  .vs-sheet {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    background: var(--bg-card);
+    border-radius: 16px 16px 0 0;
+    max-height: 80vh; overflow-y: auto;
+    padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+    transform: translateY(100%);
+    transition: transform 280ms cubic-bezier(0.32,0.72,0,1);
+    box-shadow: 0 -8px 32px rgba(0,0,0,0.4);
+    z-index: 100;
+  }
+  .vs-sheet.open { transform: translateY(0); }
+  .vs-sheet-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+    opacity: 0; pointer-events: none;
+    transition: opacity 200ms ease;
+    z-index: 99;
+  }
+  .vs-sheet-backdrop.open { opacity: 1; pointer-events: auto; }
+  .vs-sheet-handle {
+    width: 40px; height: 4px; border-radius: 2px;
+    background: var(--text-dim); opacity: 0.4;
+    margin: 0 auto 12px;
+  }
+  ```
+- 닫기: 백드롭 탭, 핸들 아래로 스와이프(`touchmove` Δy>80), 또는 Esc 키.
+- 데스크톱(≥768px): 기존 `.settings-dropdown` 유지(팝오버).
+
+### M.9 헤더 사양 (수정)
+
+```
+모바일:
+┌──────────────────────────────────────────┐
+│  ←      Vocabulary           점프       │
+│        ▓▓▓▓▓░░░░   23 / 97              │
+└──────────────────────────────────────────┘
+```
+
+- 상단 `padding-top: calc(8px + env(safe-area-inset-top));`
+- 좌측 ← 아이콘 버튼: 48×48, `aria-label="목록으로"` (텍스트 "목록으로" 병기 없음, 아이콘만)
+- 중앙 타이틀: `font-size: 1rem; font-weight: 600;`
+- 우측 "점프" 버튼: `font-size: 0.85rem; padding: 8px 14px; min-height: 40px;`
+- 진행률 바: 기존 유지, 카운터 `✓ 12 | ✕ 3 | ○ 82`는 모바일에서 `font-size: 0.72rem;`로 축소
+- **사운드 아이콘 없음**
+
+### M.10 진행률 인디케이터
+
+- 얇고 은은하게 유지: 높이 `4px` (모바일), `6px` (데스크톱).
+- 카운터 배지(`✓/✕/○`)는 헤더 진행률 바 바로 아래, `gap: 10px;` 한 줄.
+- 100% 도달 시 진행률 바 `background: var(--success);` + 살짝 글로우 애니메이션(섹션 7.3 재사용).
+
+### M.11 CSS 클래스 변경 요약 (dev agent 체크리스트)
+
+**제거(or DOM에서 사용 중단):**
+- `.kbd-hint` — Stage B 버튼 내부의 `[1]/[2]` 배지. JS에서 해당 `<span>` 생성 코드 삭제.
+- `.vs-kb-hint` 컨테이너의 Stage A/C용 힌트 문자열(빈 문자열 전달 또는 조건부 미렌더). 클래스 자체는 Stage B의 스와이프 힌트용으로 재활용 가능.
+- `.vocab-flash-card:hover` 스타일 — `@media (hover: hover) and (pointer: fine)`로 감쌀 것.
+
+**신규:**
+- `.vs-rate-btn` — Stage B 평가 버튼 공통 클래스 (`min-height: 56px`).
+- `.vs-cta-next` — Stage C 풀폭 다음 버튼.
+- `.vs-bottom-bar` — 바텀 내비 바 공통 컨테이너 (`padding-bottom: calc(12px + env(safe-area-inset-bottom))`).
+- `.vs-swipe-hint`, `.vs-swipe-hint.fading` — 최초 진입 힌트.
+- `.vs-stage-enter` — Stage 전환 애니메이션 트리거.
+- `.vs-sheet`, `.vs-sheet.open`, `.vs-sheet-backdrop`, `.vs-sheet-handle` — 바텀시트.
+- `.vs-header-mobile` — safe-area 인셋 포함 헤더.
+- `.vs-progress-bar` (기존 진행률 바를 이 클래스로 분리하고 높이 반응형 처리).
+
+**수정:**
+- `.vocab-flash-card` — `cursor: pointer`는 유지하되 `:hover`는 hover 미디어로 격리. `touch-action: pan-y;` 추가(세로 스크롤은 허용, 가로 스와이프만 JS 처리).
+- `.vocab-flash-card` `min-height`: 모바일 기준 `280px`로 축소(바텀바 공간 확보).
+
+### M.12 접근성 & 기타
+
+- 모든 아이콘 버튼에 `aria-label` 필수 (← 목록으로, 점프, 모름, 아는, 다음 단어).
+- 평가 버튼에 `aria-keyshortcuts="1"` / `"2"` — 텍스트로는 안 보이지만 스크린리더/데스크톱 파워유저에 도움.
+- `prefers-reduced-motion: reduce` 시 모든 swipe tilt, stage-enter, pulse 애니메이션 비활성화.
+- 키보드 사용자를 위해: 히든이지만 `<kbd>` 마크업을 `aria-describedby`로 연결하는 것은 **하지 않는다** (UI 텍스트 제거 원칙 우선). 키보드 단축키는 JS에서만 동작.
+
+### M.13 dev agent 구현 순서 (권장)
+
+1. `vocab-study.js`의 문자열 리터럴 교체 (섹션 M.3 표 그대로).
+2. `renderShell()` 시그니처 유지하되, hint 인자에 빈 문자열 전달. `.vs-kb-hint` 영역은 비어있으면 미렌더.
+3. Stage B 렌더에서 `<span class="kbd-hint">[1]</span>` 제거, 버튼 레이블 `✕ 모름` / `✓ 아는`로 축약, `.vs-rate-btn` 클래스 추가.
+4. Stage C 다음 버튼에 `.btn-block .vs-cta-next` 적용 + `▶` 제거하고 `다음 단어 →`로.
+5. 헤더에서 `#vs-sound` 제거, 점프 바텀시트 내부로 이동.
+6. 점프 드롭다운을 모바일(`matchMedia('(max-width: 767px)')`)에서 `.vs-sheet`로 렌더, 데스크톱은 기존 팝오버 유지.
+7. `app.css`에 M.4~M.11 CSS 블록 추가, `.vocab-flash-card:hover`를 hover 미디어로 감싸기.
+8. first-card hint: Stage B 첫 렌더 시 localStorage 플래그 검사 → 오버레이 삽입 → 첫 평가 이벤트에서 해제.
+9. 스와이프 임계값·세로 오차 가드 조정 (M.5).
+10. 키보드 리스너는 그대로 둔 채, 위 변경이 데스크톱(`window.innerWidth ≥ 768`)에서도 깨지지 않는지 확인.
+
+### M.14 수용 기준 (acceptance)
+
+- [ ] iPhone 13 mini(375px) Safari에서 Stage A/B/C 전 플로우를 **키보드 언급 없이** 수행 가능.
+- [ ] 화면 어디에도 "Space", "Enter", "Esc", "J", "←/→", "1", "2", "[1]", "[2]" 문자열이 보이지 않음.
+- [ ] 평가 버튼/다음 버튼의 탭 타겟이 ≥48px, safe-area bottom 인셋 안쪽에 위치.
+- [ ] Stage B 좌/우 스와이프로 평가 가능, 드래그 중 틸트/색상 피드백 작동.
+- [ ] 첫 세션에서만 스와이프 힌트가 뜨고, 첫 평가 후 사라지며 재방문 시 다시 뜨지 않음.
+- [ ] 사운드 토글이 헤더에 없고 점프 바텀시트 내부에서 조작 가능.
+- [ ] 데스크톱(≥768px)에서 Space/1/2/←/→/J/Esc 단축키가 여전히 동작(JS 레벨에서).
+- [ ] `prefers-reduced-motion` 사용자에게 모든 과도한 애니메이션이 꺼짐.
+- [ ] iPhone 노치/홈바와 겹치는 요소 없음 (safe-area-inset 검증).
+
+---
+*MOBILE REVISION 2026-04-06 작성. 위 섹션 3·5·7과 충돌 시 이 섹션 우선. dev agent는 M.13 순서대로 구현하고 M.14로 검수.*
