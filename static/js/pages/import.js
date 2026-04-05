@@ -214,7 +214,7 @@ export default function ImportPage(app) {
                 await API.put(`/api/questions/${questionId}`, data);
                 renderMain();
             } catch (e) {
-                alert("수정 실패: " + (e.error || ""));
+                alert("수정 실패: " + (e.detail || e.error || e.message || "알 수 없는 오류"));
             }
         });
 

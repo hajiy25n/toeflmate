@@ -29,15 +29,35 @@ export default async function MemorizePage(app, type) {
         return;
     }
 
+    function escapeHtml(s) {
+        return (s || "").replace(/[&<>"']/g, (c) => ({
+            "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+        }[c]));
+    }
+
     function render() {
         const q = questions[index];
         app.innerHTML = `
             ${renderHeader(typeLabels[type] + " - 암기")}
-            <div class="memorize-progress">${index + 1} / ${questions.length}</div>
+            <div class="memorize-jump-wrap" id="jump-wrap">
+                <button class="memorize-jump-btn" id="jump-btn" title="문제 선택">
+                    문제 ${index + 1} / ${questions.length} ▾
+                </button>
+                <div class="memorize-jump-list hidden" id="jump-list">
+                    ${questions.map((item, i) => {
+                        const preview = (item.prompt_text || "").trim();
+                        const short = preview.length > 60 ? preview.slice(0, 60) + "…" : preview;
+                        return `<button class="memorize-jump-item ${i === index ? 'active' : ''}" data-idx="${i}">
+                            <span class="jump-num">${i + 1}</span>
+                            <span class="jump-preview">${escapeHtml(short)}</span>
+                        </button>`;
+                    }).join('')}
+                </div>
+            </div>
             <div class="memorize-card">
-                <div class="memorize-question">${q.prompt_text}</div>
+                <div class="memorize-question">${escapeHtml(q.prompt_text)}</div>
                 <div class="memorize-answer ${revealed ? '' : 'hidden'}" id="answer-area">
-                    ${q.template_answer || "(템플릿 없음)"}
+                    ${escapeHtml(q.template_answer || "(템플릿 없음)")}
                 </div>
             </div>
             ${!revealed ? `
@@ -50,6 +70,37 @@ export default async function MemorizePage(app, type) {
             </div>
         `;
         bindLogout();
+
+        // Jump dropdown
+        const jumpBtn = document.getElementById("jump-btn");
+        const jumpList = document.getElementById("jump-list");
+        jumpBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            jumpList.classList.toggle("hidden");
+            if (!jumpList.classList.contains("hidden")) {
+                const active = jumpList.querySelector(".memorize-jump-item.active");
+                if (active) active.scrollIntoView({ block: "center" });
+            }
+        });
+        jumpList.querySelectorAll("[data-idx]").forEach(btn => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const newIdx = parseInt(btn.dataset.idx);
+                if (newIdx !== index) {
+                    index = newIdx;
+                    revealed = false;
+                }
+                render();
+            });
+        });
+        const closeDropdown = (e) => {
+            const wrap = document.getElementById("jump-wrap");
+            if (wrap && !wrap.contains(e.target)) {
+                jumpList?.classList.add("hidden");
+                document.removeEventListener("click", closeDropdown);
+            }
+        };
+        document.addEventListener("click", closeDropdown);
 
         const revealBtn = document.getElementById("reveal-btn");
         if (revealBtn) {

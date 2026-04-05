@@ -295,6 +295,14 @@ def add_questions(user_id: int, questions: list[dict]):
 
 def update_question(user_id: int, question_id: int, data: dict) -> bool:
     conn = get_conn()
+    # Pre-validate (Turso rowcount is unreliable, returns -1 for DML)
+    existing = conn.execute(
+        "SELECT id FROM questions WHERE id = ? AND user_id = ?",
+        (question_id, user_id),
+    ).fetchone()
+    if not existing:
+        conn.close()
+        return False
     fields = []
     values = []
     for key in ("type", "topic", "sequence", "prompt_text", "bullet_points",
@@ -307,14 +315,13 @@ def update_question(user_id: int, question_id: int, data: dict) -> bool:
         conn.close()
         return False
     values.extend([question_id, user_id])
-    cur = conn.execute(
+    conn.execute(
         f"UPDATE questions SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
-        values,
+        tuple(values),
     )
     conn.commit()
-    ok = cur.rowcount > 0
     conn.close()
-    return ok
+    return True
 
 
 def get_question(user_id: int, question_id: int):

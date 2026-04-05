@@ -228,8 +228,41 @@ async def api_import_confirm(request: Request):
     return {"ok": True, "ids": ids, "count": len(ids)}
 
 
-# --- Vocabulary endpoints (비활성화 - 단어장 기능 제거) ---
-# vocab 관련 엔드포인트 주석처리. 파일은 보존.
+# --- Vocabulary endpoints ---
+
+@app.get("/api/vocab")
+async def api_vocab_list(request: Request):
+    user_id = require_auth(request)
+    rows = db.get_vocab(user_id)
+    result = []
+    for r in rows:
+        synonyms = []
+        raw = r.get("synonyms")
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    synonyms = [
+                        {
+                            "word": (s.get("word") if isinstance(s, dict) else str(s)) or "",
+                            "meaning": (s.get("meaning") or s.get("meaning_ko") or "") if isinstance(s, dict) else "",
+                        }
+                        for s in parsed
+                    ]
+            except Exception:
+                synonyms = [
+                    {"word": w.strip(), "meaning": ""}
+                    for w in str(raw).split(",") if w.strip()
+                ]
+        result.append({
+            "id": r.get("id"),
+            "word": r.get("word"),
+            "pos": r.get("part_of_speech") or "",
+            "meaning": r.get("meaning") or "",
+            "synonyms": synonyms,
+            "category": r.get("category") or "",
+        })
+    return result
 
 
 # --- TTS endpoint (Microsoft Neural Voice) ---

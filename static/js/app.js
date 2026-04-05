@@ -7,7 +7,8 @@ import WritingEmailPage from "./pages/writing-email.js";
 import WritingDiscussionPage from "./pages/writing-discussion.js";
 import MemorizePage from "./pages/memorize.js";
 import ImportPage from "./pages/import.js";
-// import VocabPage from "./pages/vocab.js"; // 단어장 기능 비활성화
+import VocabPage from "./pages/vocab.js";
+import VocabStudyPage from "./pages/vocab-study.js";
 
 const app = document.getElementById("app");
 
@@ -26,6 +27,7 @@ async function checkAuth() {
 async function route() {
     const hash = location.hash || "#/";
     document.onkeydown = null;
+    document.onclick = null;
     app.ontouchstart = null;
     app.ontouchend = null;
 
@@ -56,8 +58,15 @@ async function route() {
         MemorizePage(app, "writing_discussion");
     } else if (hash === "#/import") {
         ImportPage(app);
-    // } else if (hash === "#/vocab") {
-    //     VocabPage(app); // 단어장 기능 비활성화
+    } else if (hash === "#/vocab") {
+        VocabPage(app);
+    } else if (hash.startsWith("#/vocab/study")) {
+        const qIdx = hash.indexOf("?");
+        const params = new URLSearchParams(qIdx >= 0 ? hash.slice(qIdx + 1) : "");
+        VocabStudyPage(app, {
+            start: params.has("start") ? parseInt(params.get("start"), 10) : null,
+            mode: params.get("mode") || null,
+        });
     } else {
         location.hash = "#/";
     }
