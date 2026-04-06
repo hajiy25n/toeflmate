@@ -1,4 +1,4 @@
-const CACHE_NAME = "toeflmate-v3";
+const CACHE_NAME = "toeflmate-v4";
 const STATIC_ASSETS = [
     "/",
     "/static/css/app.css",
