@@ -1524,58 +1524,69 @@ a { color: var(--accent); text-decoration: none; }
     width: fit-content;
 }
 .memo-mode-btn {
-    padding: 6px 16px;
-    font-size: 0.85rem;
+    padding: 8px 20px;
+    font-size: 0.85rem; font-weight: 500;
     color: var(--text-muted);
     background: transparent;
     border: none;
     cursor: pointer;
     border-radius: 20px;
-    transition: background 0.2s, color 0.2s;
+    transition: all 0.2s;
     white-space: nowrap;
 }
 .memo-mode-btn.active {
     background: var(--accent);
-    color: #fff;
+    color: #000; font-weight: 600;
     border-radius: 20px;
+    box-shadow: 0 2px 8px rgba(79, 195, 247, 0.3);
 }
 
 /* --- Memorize Typing Dock (bottom-fixed) --- */
 .memo-typing-scroll-area {
     flex: 1; overflow-y: auto;
-    padding-bottom: 160px;
+    padding-bottom: 180px;
 }
 .memo-typing-dock {
     position: fixed; bottom: 0; left: 0; right: 0;
-    background: var(--bg);
-    border-top: 1px solid #2a3a5c;
-    padding: 8px 16px calc(8px + env(safe-area-inset-bottom));
+    background: linear-gradient(to bottom, var(--bg-card), var(--bg));
+    border-top: 1px solid var(--accent);
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
     z-index: 30;
     max-width: var(--max-w);
     margin: 0 auto;
+    box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
 }
 .memo-typing-dock-row {
     display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 6px; gap: 8px;
+    margin-bottom: 8px; gap: 10px;
 }
-.memo-typing-dock-row .btn { min-width: 44px; min-height: 36px; }
+.memo-typing-dock-row .btn {
+    min-width: 48px; min-height: 40px;
+    border-radius: var(--radius-sm);
+    font-size: 1rem; font-weight: 600;
+}
 .memo-typing-area {
     width: 100%;
-    height: 80px; max-height: 30vh;
+    height: 90px; max-height: 30vh;
     resize: none;
     background: var(--bg-input);
-    border: 1px solid #2a3a5c;
+    border: 2px solid #2a3a5c;
     color: var(--text);
     font-family: var(--font);
-    font-size: 0.95rem;
-    border-radius: var(--radius-sm);
-    padding: 10px 12px;
+    font-size: 1rem;
+    line-height: 1.6;
+    border-radius: var(--radius);
+    padding: 12px 14px;
     box-sizing: border-box;
     outline: none;
-    transition: border-color 0.2s;
+    transition: border-color 0.2s, box-shadow 0.2s;
 }
 .memo-typing-area:focus {
     border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(79, 195, 247, 0.15);
+}
+.memo-typing-area::placeholder {
+    color: var(--text-dim);
 }
 
 /* --- Memorize Answer Toggle --- */
@@ -1605,9 +1616,10 @@ a { color: var(--accent); text-decoration: none; }
 
 /* --- Memorize Char Count --- */
 .memo-char-count {
-    color: var(--text-dim);
-    font-size: 0.8rem;
-    margin-top: 4px;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-family: var(--mono);
+    flex: 1; text-align: center;
     text-align: right;
 }
 
