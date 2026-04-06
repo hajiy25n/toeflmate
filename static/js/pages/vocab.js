@@ -14,8 +14,10 @@ import {
 
 export default async function VocabPage(app) {
     let words = [];
+    let categories = [];
     let progress = loadProgress();
     let filter = "all"; // all | unseen | known | unknown
+    let selectedCategory = localStorage.getItem("vocab_selected_category") || null;
 
     // Skeleton
     app.innerHTML = `
@@ -32,7 +34,7 @@ export default async function VocabPage(app) {
     `;
     bindLogout();
 
-    // Load words (cache → network)
+    // Load words (cache -> network)
     try {
         const cached = sessionStorage.getItem("toeflmate_vocab_cache");
         if (cached) words = JSON.parse(cached) || [];
@@ -51,6 +53,25 @@ export default async function VocabPage(app) {
         }
     }
 
+    // Load categories
+    try {
+        categories = await API.get("/api/vocab/categories");
+    } catch {
+        // Derive from words as fallback
+        const catMap = {};
+        for (const w of words) {
+            const cat = w.category || "default";
+            catMap[cat] = (catMap[cat] || 0) + 1;
+        }
+        categories = Object.entries(catMap).map(([category, count]) => ({ category, count }));
+    }
+
+    // Validate selectedCategory still exists
+    if (selectedCategory && !categories.find(c => c.category === selectedCategory)) {
+        selectedCategory = null;
+        localStorage.removeItem("vocab_selected_category");
+    }
+
     if (!words.length) {
         renderEmpty();
         return;
@@ -58,21 +79,28 @@ export default async function VocabPage(app) {
 
     render();
 
+    function filteredByCategory() {
+        if (!selectedCategory) return words;
+        return words.filter(w => w.category === selectedCategory);
+    }
+
     function counts() {
+        const catWords = filteredByCategory();
         let known = 0, unknown = 0, unseen = 0;
-        for (const w of words) {
+        for (const w of catWords) {
             const st = statusOf(progress, w.id);
             if (st === "known") known++;
             else if (st === "unknown") unknown++;
             else unseen++;
         }
-        return { known, unknown, unseen, total: words.length };
+        return { known, unknown, unseen, total: catWords.length };
     }
 
     function filteredWords() {
-        if (filter === "all") return words.map((w, i) => ({ w, i }));
-        return words
-            .map((w, i) => ({ w, i }))
+        const catWords = filteredByCategory();
+        if (filter === "all") return catWords.map((w, i) => ({ w, origIdx: words.indexOf(w) }));
+        return catWords
+            .map((w) => ({ w, origIdx: words.indexOf(w) }))
             .filter(({ w }) => {
                 const st = statusOf(progress, w.id);
                 if (filter === "unseen") return st === "unseen";
@@ -80,6 +108,10 @@ export default async function VocabPage(app) {
                 if (filter === "unknown") return st === "unknown";
                 return true;
             });
+    }
+
+    function totalForAll() {
+        return words.length;
     }
 
     function render() {
@@ -90,7 +122,11 @@ export default async function VocabPage(app) {
         if (lastIdx != null && lastIdx >= 0 && lastIdx < words.length) {
             const w = words[lastIdx];
             if (w && statusOf(progress, w.id) !== "known") {
-                resumeWord = { idx: lastIdx, word: w };
+                // Only show resume if word is in current category filter
+                const catWords = filteredByCategory();
+                if (catWords.includes(w)) {
+                    resumeWord = { idx: lastIdx, word: w };
+                }
             }
         }
 
@@ -101,6 +137,12 @@ export default async function VocabPage(app) {
             <div class="vocab-header-actions">
                 <button class="btn btn-sm btn-secondary" id="vocab-reset">초기화</button>
                 <button class="btn btn-sm btn-primary" id="vocab-start">▶ 학습 시작</button>
+            </div>
+            <div class="vocab-cat-bar" id="vocab-cat-bar">
+                <button class="vocab-cat-chip ${!selectedCategory ? 'active' : ''}" data-category="">전체 ${totalForAll()}</button>
+                ${categories.map(cat => `
+                    <button class="vocab-cat-chip ${selectedCategory === cat.category ? 'active' : ''}" data-category="${escapeHtml(cat.category)}">${escapeHtml(cat.category)} ${cat.count}</button>
+                `).join("")}
             </div>
             <div class="vocab-progress-wrap">
                 <div class="vocab-progress-bar">
@@ -131,7 +173,7 @@ export default async function VocabPage(app) {
             <div class="vocab-list">
                 ${filteredList.length === 0
                     ? `<div class="vocab-empty-filter">이 필터에 해당하는 단어가 없어요.</div>`
-                    : filteredList.map(({ w, i }) => renderItem(w, i)).join("")}
+                    : filteredList.map(({ w, origIdx }) => renderItem(w, origIdx)).join("")}
             </div>
         `;
         bindLogout();
@@ -161,7 +203,11 @@ export default async function VocabPage(app) {
 
     function bindEvents() {
         document.getElementById("vocab-start")?.addEventListener("click", () => {
-            location.hash = "#/vocab/study";
+            if (selectedCategory) {
+                location.hash = `#/vocab/study?category=${encodeURIComponent(selectedCategory)}`;
+            } else {
+                location.hash = "#/vocab/study";
+            }
         });
         document.getElementById("vocab-reset")?.addEventListener("click", () => {
             if (!confirm("모든 학습 진행 상황을 초기화할까요? 아는단어/모르는단어 기록이 모두 삭제됩니다. 이 작업은 되돌릴 수 없습니다.")) return;
@@ -172,6 +218,20 @@ export default async function VocabPage(app) {
             showToast("초기화되었습니다");
             render();
         });
+        // Category chips
+        app.querySelectorAll(".vocab-cat-chip").forEach((chip) => {
+            chip.addEventListener("click", () => {
+                const cat = chip.dataset.category;
+                selectedCategory = cat || null;
+                if (selectedCategory) {
+                    localStorage.setItem("vocab_selected_category", selectedCategory);
+                } else {
+                    localStorage.removeItem("vocab_selected_category");
+                }
+                filter = "all"; // reset status filter on category change
+                render();
+            });
+        });
         app.querySelectorAll(".mode-btn[data-filter]").forEach((btn) => {
             btn.addEventListener("click", () => {
                 filter = btn.dataset.filter;
@@ -181,14 +241,22 @@ export default async function VocabPage(app) {
         app.querySelectorAll(".vocab-list-item").forEach((el) => {
             el.addEventListener("click", () => {
                 const idx = parseInt(el.dataset.idx, 10);
-                location.hash = `#/vocab/study?start=${idx}`;
+                if (selectedCategory) {
+                    location.hash = `#/vocab/study?start=${idx}&category=${encodeURIComponent(selectedCategory)}`;
+                } else {
+                    location.hash = `#/vocab/study?start=${idx}`;
+                }
             });
         });
         const resume = app.querySelector(".vocab-resume");
         if (resume) {
             resume.addEventListener("click", () => {
                 const idx = parseInt(resume.dataset.idx, 10);
-                location.hash = `#/vocab/study?start=${idx}`;
+                if (selectedCategory) {
+                    location.hash = `#/vocab/study?start=${idx}&category=${encodeURIComponent(selectedCategory)}`;
+                } else {
+                    location.hash = `#/vocab/study?start=${idx}`;
+                }
             });
         }
     }

@@ -1401,3 +1401,171 @@ Stage C:
 
 ---
 *MOBILE REVISION 2026-04-06 작성. 위 섹션 3·5·7과 충돌 시 이 섹션 우선. dev agent는 M.13 순서대로 구현하고 M.14로 검수.*
+
+---
+
+## [CATEGORY & TYPING MODE 2026-04-06]
+
+이 섹션은 두 가지 신규 기능을 정의한다. 기존 섹션과 충돌 시 이 섹션 우선.
+
+---
+
+### C.1 단어장 카테고리 시스템
+
+#### C.1.1 데이터 모델
+- DB `vocabulary` 테이블에 이미 `category TEXT` 컬럼 존재
+- 기존 97단어: category `"BOB TOEFL"` → `"4월 1주차"` 로 변경 (DB migration)
+- 향후 단어 추가 시 다른 카테고리 사용 가능 (e.g. "4월 2주차")
+
+#### C.1.2 API 변경
+- `GET /api/vocab` 에 `?category=...` 쿼리 파라미터 추가 (없으면 전체)
+- `GET /api/vocab/categories` 새 엔드포인트: 카테고리 목록 + 각 단어 수 반환
+  - 응답: `[{category: "4월 1주차", count: 97}, ...]`
+  - 내부: `db.get_vocab_categories(user_id)` 이미 존재
+
+#### C.1.3 Vocab 목록 뷰 (#/vocab) UI
+
+진행률 바 위에 카테고리 칩 바 삽입:
+
+```
+┌──────────────────────────────────────────────┐
+│  ← Vocabulary              [초기화] [▶ 학습] │
+├──────────────────────────────────────────────┤
+│  [전체 97] [4월 1주차 97]                    │  ← 칩 바 (스크롤 가능)
+├──────────────────────────────────────────────┤
+│  ▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░  12 / 97 (12%)    │
+│  ...                                         │
+```
+
+**칩 스타일** (`.vocab-cat-bar`, `.vocab-cat-chip`):
+- 수평 스크롤 (flex, `overflow-x: auto`, `-webkit-overflow-scrolling: touch`)
+- 각 칩: `padding: 6px 14px`, `border-radius: 16px`, `font-size: 0.8rem`
+- 비활성: `background: var(--bg-input)`, `color: var(--text-muted)`
+- 활성: `background: var(--accent)`, `color: #fff`
+- "전체" 칩 항상 첫 번째
+- 칩 클릭 → 선택 카테고리 변경 → 목록 + 진행률 필터링
+- 선택 카테고리: `localStorage vocab_selected_category` 에 저장 (null = 전체)
+
+#### C.1.4 학습 모드 연동
+- 학습 시작 시 선택된 카테고리의 단어만 큐에 넣기
+- `#/vocab/study?category=4월 1주차` 쿼리 파라미터로 전달
+- "전체" 선택 시 기존 동작 (모든 단어)
+
+#### C.1.5 홈 카드 연동
+- 홈 카드에서는 항상 **전체** 진행률 표시 (카테고리 무관)
+- 카테고리 수 표시: "97개 · 1 카테고리"
+
+---
+
+### C.2 Writing 암기 — 타이핑 연습 모드
+
+#### C.2.1 개요
+현재 `memorize.js`의 "보기 모드"에 **타이핑 연습** 모드를 추가. 문제를 보고 직접 타자로 답변을 쳐볼 수 있음.
+
+#### C.2.2 모드 토글
+
+진행률(문제 N/M) 바로 아래에 토글 삽입:
+
+```
+┌──────────────────────────────────────────────┐
+│  문제 3 / 15 ▾                               │
+│  [👁 보기] [✏️ 타이핑]                       │  ← 모드 토글
+├──────────────────────────────────────────────┤
+```
+
+**토글 스타일** (`.memo-mode-toggle`, `.memo-mode-btn`):
+- 2개 버튼 세그먼트 컨트롤
+- `display: flex`, `border-radius: 20px`, `background: var(--bg-input)`
+- 비활성: `color: var(--text-muted)`, 배경 투명
+- 활성: `background: var(--accent)`, `color: #fff`, `border-radius: 20px`
+- `padding: 6px 16px`, `font-size: 0.85rem`
+- 모드: `localStorage memo_typing_mode` = `"view"` | `"typing"` (기본: "view")
+
+#### C.2.3 타이핑 모드 레이아웃
+
+```
+┌──────────────────────────────────────────────┐
+│  [문제]                                      │
+│  In your opinion, do you think it is         │
+│  necessary for young people...               │
+├──────────────────────────────────────────────┤
+│  [모범 답안]  (접기/펼치기 가능)              │
+│  I believe that young people should...       │
+├──────────────────────────────────────────────┤
+│  [내 답변]                                   │
+│  ┌────────────────────────────────────────┐  │
+│  │ (textarea — 여기에 타이핑)             │  │
+│  │                                        │  │
+│  │                                        │  │
+│  └────────────────────────────────────────┘  │
+│  글자 수: 0 / 150                            │
+├──────────────────────────────────────────────┤
+│  [← 이전]    [홈으로]    [다음 →]            │
+└──────────────────────────────────────────────┘
+```
+
+**구현 세부사항**:
+- 문제 (`prompt_text`): 항상 보임, 상단
+- 모범 답안 (`template_answer`): `.memo-answer-toggle` 버튼으로 접기/펼치기
+  - 기본: 접힌 상태 (blur 처리, "탭하여 답안 보기")
+  - 펼쳤을 때: 평문 표시
+- 타이핑 영역: `<textarea>` 클래스 `.memo-typing-area`
+  - `min-height: 150px`, `resize: vertical`
+  - `background: var(--bg-input)`, `border: 1px solid #2a3a5c`
+  - `color: var(--text)`, `font-family: var(--font)`, `font-size: 0.95rem`
+  - `border-radius: var(--radius-sm)`, `padding: 12px`
+  - 자동 포커스 (`autofocus`)
+  - 모바일 키보드에 의한 뷰포트 축소 대응: `document.activeElement.scrollIntoView()`
+- 글자 수: `.memo-char-count` — `color: var(--text-dim)`, `font-size: 0.8rem`
+  - 모범 답안 글자 수 기준으로 `0 / {templateLength}` 표시
+- 타이핑 내용은 문제 전환 시 초기화 (저장하지 않음)
+- 네비게이션 버튼·키보드·스와이프는 기존과 동일 (순환 포함)
+
+#### C.2.4 보기 모드 (기존)
+- 현재 동작 그대로 유지
+- 문제 + blur된 답안 + "답변 보기" 버튼
+
+---
+
+### C.3 신규/수정 CSS 클래스
+
+| 클래스 | 용도 | 신규/수정 |
+|---|---|---|
+| `.vocab-cat-bar` | 카테고리 칩 바 (수평 스크롤) | 신규 |
+| `.vocab-cat-chip` | 개별 칩 | 신규 |
+| `.vocab-cat-chip.active` | 선택된 칩 | 신규 |
+| `.memo-mode-toggle` | 보기/타이핑 세그먼트 컨트롤 | 신규 |
+| `.memo-mode-btn` | 토글 버튼 개별 | 신규 |
+| `.memo-mode-btn.active` | 선택된 모드 | 신규 |
+| `.memo-typing-area` | 타이핑 textarea | 신규 |
+| `.memo-answer-toggle` | 답안 접기/펼치기 영역 | 신규 |
+| `.memo-char-count` | 글자 수 표시 | 신규 |
+
+---
+
+### C.4 구현 체크리스트
+
+**백엔드**:
+1. `GET /api/vocab/categories` 엔드포인트 추가 (db.get_vocab_categories)
+2. `GET /api/vocab` 에 `?category=` 쿼리 파라미터 지원
+3. DB migration: 기존 "BOB TOEFL" 카테고리 → "4월 1주차" 변경 (seed 스크립트 또는 API)
+
+**프론트 — 카테고리**:
+4. vocab.js: 카테고리 칩 바 추가, 선택 시 필터링
+5. vocab-study.js: `?category=` 파라미터 수신 → 해당 카테고리만 큐 구성
+6. home.js: 전체 진행률 + 카테고리 수 표시 (선택사항)
+
+**프론트 — 타이핑 모드**:
+7. memorize.js: 모드 토글 UI 삽입 (보기/타이핑)
+8. memorize.js: 타이핑 모드 render 함수 (문제 + 접기형 답안 + textarea + 글자수)
+9. memorize.js: localStorage `memo_typing_mode` 저장/복원
+10. memorize.js: 순환 네비 (이미 완료 ✅)
+
+**CSS**:
+11. app.css: C.3 테이블의 모든 클래스 추가
+
+**검증**:
+12. 모바일 375px에서 카테고리 칩 수평 스크롤 확인
+13. 타이핑 모드에서 모바일 키보드 올라와도 레이아웃 깨지지 않는지 확인
+14. 카테고리 필터 + 학습 모드 연동 확인
+15. 에러 0, 콘솔 클린 확인

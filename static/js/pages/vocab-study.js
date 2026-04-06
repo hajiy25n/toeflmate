@@ -18,6 +18,7 @@ export default async function VocabStudyPage(app, opts = {}) {
     let sessionStats = { known: 0, unknown: 0 };
     const mode = opts.mode || null;
     const startIdx = Number.isFinite(opts.start) ? opts.start : null;
+    const categoryFilter = opts.category || null;
 
     const isMobile = () => window.matchMedia("(max-width: 767px)").matches;
 
@@ -41,6 +42,12 @@ export default async function VocabStudyPage(app, opts = {}) {
     }
 
     if (!allWords.length) { renderError(); return; }
+
+    // Category filter: restrict allWords to the selected category
+    if (categoryFilter) {
+        allWords = allWords.filter(w => w.category === categoryFilter);
+        if (!allWords.length) { renderError(); return; }
+    }
 
     // Check: all mastered
     const allKnown = allWords.every((w) => statusOf(progress, w.id) === "known");
@@ -165,7 +172,7 @@ export default async function VocabStudyPage(app, opts = {}) {
         `;
         const bottomBar = `
             <div class="vs-bottom-bar vs-bottom-bar-a">
-                <button class="vs-bar-side" id="vs-prev" ${queueIndex === 0 ? "disabled" : ""} aria-label="이전 단어" aria-keyshortcuts="ArrowLeft">← 이전</button>
+                <button class="vs-bar-side" id="vs-prev" aria-label="이전 단어" aria-keyshortcuts="ArrowLeft">← 이전</button>
                 <div class="vs-bar-center">탭하여 뜻 보기</div>
                 <button class="vs-bar-side" id="vs-next" aria-label="다음 단어">다음 →</button>
             </div>
@@ -304,8 +311,7 @@ export default async function VocabStudyPage(app, opts = {}) {
     }
 
     function prevCard() {
-        if (queueIndex <= 0) return;
-        queueIndex--;
+        queueIndex = queueIndex > 0 ? queueIndex - 1 : queue.length - 1;
         stage = "A";
         renderCard();
     }
@@ -591,11 +597,13 @@ export default async function VocabStudyPage(app, opts = {}) {
         `;
         bindLogout();
         document.getElementById("vc-unknown").addEventListener("click", () => {
-            location.hash = "#/vocab/study?mode=unknown";
+            const catParam = categoryFilter ? `&category=${encodeURIComponent(categoryFilter)}` : "";
+            location.hash = `#/vocab/study?mode=unknown${catParam}`;
         });
         document.getElementById("vc-restart").addEventListener("click", () => {
-            location.hash = "#/vocab/study";
-            setTimeout(() => VocabStudyPage(app, {}), 0);
+            const catParam = categoryFilter ? `?category=${encodeURIComponent(categoryFilter)}` : "";
+            location.hash = `#/vocab/study${catParam}`;
+            setTimeout(() => VocabStudyPage(app, { category: categoryFilter }), 0);
         });
         document.getElementById("vc-back").addEventListener("click", () => {
             location.hash = "#/vocab";

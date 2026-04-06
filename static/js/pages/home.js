@@ -20,6 +20,7 @@ export default async function HomePage(app) {
 
     // Vocab summary (uses cached vocab list + localStorage progress)
     let vocabTotal = 0;
+    let vocabCategoryCount = 0;
     try {
         const cached = sessionStorage.getItem("toeflmate_vocab_cache");
         if (cached) {
@@ -31,6 +32,10 @@ export default async function HomePage(app) {
             vocabTotal = words.length;
             sessionStorage.setItem("toeflmate_vocab_cache", JSON.stringify(words));
         }
+    } catch {}
+    try {
+        const cats = await API.get("/api/vocab/categories");
+        if (Array.isArray(cats)) vocabCategoryCount = cats.length;
     } catch {}
 
     const progress = readVocabProgress();
@@ -49,7 +54,7 @@ export default async function HomePage(app) {
             <div class="home-card vocab-home-card" data-href="#/vocab">
                 <div class="home-card-icon">📚</div>
                 <div class="home-card-title">Vocabulary</div>
-                <div class="home-card-desc">TOEFL 핵심 단어 ${vocabTotal || 97}개 플래시카드 암기</div>
+                <div class="home-card-desc">${vocabTotal || 97}개${vocabCategoryCount ? ` · ${vocabCategoryCount} 카테고리` : ""} 플래시카드 암기</div>
                 <div class="vocab-home-badges">
                     <span class="vocab-home-badge known">✓ 아는단어 ${knownCount}</span>
                     <span class="home-card-count">○ 미학습 ${unseenCount}</span>

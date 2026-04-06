@@ -230,10 +230,35 @@ async def api_import_confirm(request: Request):
 
 # --- Vocabulary endpoints ---
 
+@app.get("/api/vocab/categories")
+async def api_vocab_categories(request: Request):
+    user_id = require_auth(request)
+    return db.get_vocab_categories(user_id)
+
+
+@app.post("/api/vocab/rename-category")
+async def api_vocab_rename_category(request: Request):
+    user_id = require_auth(request)
+    body = await request.json()
+    old_name = body.get("old_name", "").strip()
+    new_name = body.get("new_name", "").strip()
+    if not old_name or not new_name:
+        raise HTTPException(400, "old_name and new_name are required")
+    conn = db.get_conn()
+    conn.execute(
+        "UPDATE vocabulary SET category = ? WHERE user_id = ? AND category = ?",
+        (new_name, user_id, old_name),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
 @app.get("/api/vocab")
 async def api_vocab_list(request: Request):
     user_id = require_auth(request)
-    rows = db.get_vocab(user_id)
+    category = request.query_params.get("category")
+    rows = db.get_vocab(user_id, category=category if category else None)
     result = []
     for r in rows:
         synonyms = []

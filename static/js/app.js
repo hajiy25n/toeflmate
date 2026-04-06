@@ -66,6 +66,7 @@ async function route() {
         VocabStudyPage(app, {
             start: params.has("start") ? parseInt(params.get("start"), 10) : null,
             mode: params.get("mode") || null,
+            category: params.get("category") || null,
         });
     } else {
         location.hash = "#/";
